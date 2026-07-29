@@ -15,23 +15,6 @@ Salty Casino brings the thrill of a real casino into Case Clicker Online without
 - **Real-time updates** — live balance and game state syncing for multiplayer sessions
 - **Fair play systems** — provably fair or server-authoritative game logic to prevent exploits
 
-## 🛠️ Tech Stack
-
-- **Core logic**: JavaScript (`salty-core.js`)
-- **Frontend**: HTML/CSS/JS
-- **Backend/Realtime**: Firebase (recommended for live multiplayer sync and balance storage)
-- **Hosting**: Netlify (for static frontend deployment)
-
-*(Adjust this section to reflect your actual stack once finalized.)*
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- Node.js and npm installed
-- A Firebase project (if using Firebase for backend/multiplayer sync)
-
-
 ## 🎮 How to Play
 
 1. **Deposit** — log in and deposit your CCO tokens into your casino balance

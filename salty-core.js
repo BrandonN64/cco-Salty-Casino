@@ -3,10 +3,15 @@
 // Loaded via @require by the main salty-casino.user.js loader.
 // Provides: config constants, Firebase init, Balance manager, shared card/
 // deck/hand-eval utilities, chip/bet-control UI helpers, the dark-shell
-// style + tab shell, the one-time disclaimer, and the games-tab card
+// style + home-grid shell, the one-time disclaimer, and the games-tab card
 // injection. Every other module (blackjack, roulette, baccarat, poker,
 // casebattle) depends on window.SaltyCore existing before it runs, so this
 // file MUST be the first @require in the main script.
+//
+// Adding a new game: a module just needs to do
+//   window.SaltyCore.GAME_MODULES.mygame = { label: "My Game", icon: "🎲", mount(el) {...}, order: 6 };
+// and it will automatically appear as a card on the home grid — no edits
+// needed here.
 // ==/UserScript==
 (function () {
   "use strict";
@@ -615,10 +620,17 @@
         box-shadow:0 6px 20px rgba(0,0,0,.5);
       }
 
-      #${OVERLAY_ID} .games{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; }
-      #${OVERLAY_ID} .game{ background:var(--panel-2); border:1px solid var(--border); border-radius:14px; padding:16px; }
-      #${OVERLAY_ID} .game h3{ margin:0 0 8px; font-size:18px; }
-      #${OVERLAY_ID} .game p{ margin:0; color:var(--text-dim); }
+      #${OVERLAY_ID} .games-grid{ display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
+      @media (max-width:900px){ #${OVERLAY_ID} .games-grid{ grid-template-columns:repeat(2,1fr); } }
+      #${OVERLAY_ID} .game-card{
+        background:var(--panel-2); border:1px solid var(--border); border-radius:14px; padding:24px 16px;
+        display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px;
+        min-height:150px; cursor:pointer; transition:border-color .15s ease, transform .15s ease, box-shadow .15s ease;
+      }
+      #${OVERLAY_ID} .game-card:hover{ border-color:var(--gold); transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,.35); }
+      #${OVERLAY_ID} .game-card-icon{ width:64px; height:64px; display:flex; align-items:center; justify-content:center; font-size:34px; }
+      #${OVERLAY_ID} .game-card-icon img, #${OVERLAY_ID} .game-card-icon svg{ width:100%; height:100%; object-fit:contain; }
+      #${OVERLAY_ID} .game-card-label{ font-weight:700; font-size:15px; text-align:center; color:var(--text); }
 
       /* --- disclaimer modal --- */
       #saltys-disclaimer{
@@ -750,10 +762,27 @@
   //    (Games/{Blackjack,Roulette,...} objects are defined further below
   //    and register themselves into GAME_MODULES.)
   // ---------------------------------------------------------------------
-  const GAME_MODULES = {}; // key -> { label, mount(el), unmount() }
-  const TAB_ORDER = ["blackjack", "roulette", "casebattle", "baccarat", "poker"];
-  let activeTab = "blackjack";
+  // Each entry: { label, icon, mount(el), unmount(), order }. `icon` can be
+  // an emoji, a raw <svg>...</svg> string, or an <img src="..."> string —
+  // whatever renderHome() gets handed is dropped straight into the card's
+  // icon slot as innerHTML. `order` is optional; modules without one are
+  // sorted after ordered ones, in registration order, so simply adding a
+  // new `GAME_MODULES.foo = {...}` line in a new @require'd file is enough
+  // for it to appear on the home grid automatically — nothing else to wire.
+  const GAME_MODULES = {};
+  const DEFAULT_ICON = `<div style="width:56px;height:56px;border-radius:50%;background:var(--panel-2);display:flex;align-items:center;justify-content:center;font-size:24px;">?</div>`;
+  let activeTab = null; // null = home grid
   let activeUnmount = null;
+
+  function registeredGameKeys() {
+    return Object.keys(GAME_MODULES).sort((a, b) => {
+      const oa = GAME_MODULES[a].order, ob = GAME_MODULES[b].order;
+      if (oa != null && ob != null) return oa - ob;
+      if (oa != null) return -1;
+      if (ob != null) return 1;
+      return 0;
+    });
+  }
 
   function ensureOverlay() {
     let ov = document.getElementById(OVERLAY_ID);
@@ -765,9 +794,12 @@
     ov.innerHTML = `
       <div class="wrap">
         <div class="head">
-          <div>
-            <div class="title">Salty's <span>Casino</span></div>
-            <div class="sub">Unofficial fan mod &middot; play-money only &middot; not affiliated with case-clicker.com</div>
+          <div class="row" style="gap:14px;align-items:center">
+            <button class="btn" id="saltys-casino-home" title="Back to games" style="display:none">&larr; Games</button>
+            <div>
+              <div class="title">Salty's <span>Casino</span></div>
+              <div class="sub">Unofficial fan mod &middot; play-money only &middot; not affiliated with case-clicker.com</div>
+            </div>
           </div>
           <div class="row">
             <div class="balance">
@@ -777,22 +809,16 @@
                 <div class="amt" id="saltys-balance-amt">&mdash;</div>
               </div>
             </div>
-            <button class="btn" id="saltys-casino-close">Back</button>
+            <button class="btn" id="saltys-casino-close">Close</button>
           </div>
         </div>
 
-        <div class="tabs" id="saltys-tabs"></div>
         <div id="saltys-tab-panel"></div>
       </div>
     `;
     document.body.appendChild(ov);
 
-    const tabsEl = ov.querySelector("#saltys-tabs");
-    tabsEl.innerHTML = TAB_ORDER.map((key) => `<button class="tab" data-tab="${key}">${GAME_MODULES[key]?.label || key}</button>`).join("");
-    tabsEl.addEventListener("click", (e) => {
-      const btn = e.target.closest(".tab");
-      if (btn) switchTab(btn.dataset.tab);
-    });
+    ov.querySelector("#saltys-casino-home").addEventListener("click", goHome);
 
     ov.querySelector("#saltys-casino-close").addEventListener("click", () => {
       if (location.hash === "#" + HASH) {
@@ -809,13 +835,44 @@
     return ov;
   }
 
+  // The case-clicker-style games grid: one card per registered module,
+  // icon on top, name underneath. Re-rendered fresh every time you land
+  // on it, so newly @require'd modules that register themselves after
+  // the overlay was first built still show up correctly.
+  function renderHome() {
+    const panel = document.getElementById("saltys-tab-panel");
+    const keys = registeredGameKeys();
+    document.getElementById("saltys-casino-home").style.display = "none";
+    if (!keys.length) {
+      panel.innerHTML = `<div class="table-surface center muted">No games loaded yet.</div>`;
+      return;
+    }
+    panel.innerHTML = `
+      <div class="games-grid">
+        ${keys.map((key) => `
+          <div class="game-card" data-game="${key}">
+            <div class="game-card-icon">${GAME_MODULES[key].icon || DEFAULT_ICON}</div>
+            <div class="game-card-label">${GAME_MODULES[key].label || key}</div>
+          </div>
+        `).join("")}
+      </div>
+    `;
+    panel.querySelectorAll(".game-card").forEach((card) => {
+      card.addEventListener("click", () => switchTab(card.dataset.game));
+    });
+  }
+
+  function goHome() {
+    activeTab = null;
+    if (activeUnmount) { try { activeUnmount(); } catch {} activeUnmount = null; }
+    renderHome();
+  }
+
   function switchTab(key) {
     if (!GAME_MODULES[key]) return;
     activeTab = key;
-    document.querySelectorAll(`#${OVERLAY_ID} .tab`).forEach((b) => {
-      b.classList.toggle("active", b.dataset.tab === key);
-    });
     if (activeUnmount) { try { activeUnmount(); } catch {} activeUnmount = null; }
+    document.getElementById("saltys-casino-home").style.display = "inline-block";
     const panel = document.getElementById("saltys-tab-panel");
     panel.innerHTML = "";
     const result = GAME_MODULES[key].mount(panel);
@@ -832,7 +889,8 @@
     if (show) {
       await showDisclaimer();
       ov.style.display = "block";
-      switchTab(activeTab);
+      if (activeTab && GAME_MODULES[activeTab]) switchTab(activeTab);
+      else goHome();
     } else {
       ov.style.display = "none";
       if (activeUnmount) { try { activeUnmount(); } catch {} activeUnmount = null; }
@@ -972,12 +1030,15 @@
     showDisclaimer,
     toast,
     GAME_MODULES,
-    TAB_ORDER,
     ensureOverlay,
     switchTab,
     overlayShouldShow,
     updateView,
     injectGamesCard,
-    ensureFallbackLauncher
+    ensureFallbackLauncher,
+    goHome,
+    renderHome,
+    registeredGameKeys,
+    DEFAULT_ICON
   };
 })();

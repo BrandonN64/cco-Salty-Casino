@@ -12,6 +12,12 @@
 //   window.SaltyCore.GAME_MODULES.mygame = { label: "My Game", icon: "🎲", mount(el) {...}, order: 6 };
 // and it will automatically appear as a card on the home grid — no edits
 // needed here.
+//
+// Firebase's db/uid/authReady/firebaseConfigured are only known AFTER
+// initFirebase()+Balance.init() run (done once, by the loader). Other
+// modules must read them via SaltyCore.getDb() / getUid() / getAuthReady()
+// / isFirebaseConfigured() — NOT by destructuring them at load time —
+// since destructuring would freeze in the pre-init null/false values.
 // ==/UserScript==
 (function () {
   "use strict";
@@ -362,6 +368,16 @@
   let authReady = null;
   let uid = null;
   let firebaseConfigured = FIREBASE_CONFIG.apiKey !== "PASTE_YOUR_API_KEY";
+  // These four are reassigned during init (db/authReady get set, uid
+  // resolves once auth completes, firebaseConfigured can flip to false on
+  // failure) — plain destructuring `const { db } = SaltyCore` in another
+  // module would freeze it at its initial null/false value, so modules
+  // that need the live value call these getters instead, or just read
+  // off SaltyCore.db() etc. at the point of use.
+  function getDb() { return db; }
+  function getAuthReady() { return authReady; }
+  function getUid() { return uid; }
+  function isFirebaseConfigured() { return firebaseConfigured; }
 
   function initFirebase() {
     if (!firebaseConfigured) return;
@@ -973,11 +989,6 @@
   // ---------------------------------------------------------------------
   
 
-  // -----------------------------------------------------------------------
-  // Export everything other modules need onto a shared namespace. Modules
-  // pull what they need via `const { Balance, fmt, Shoe } = window.SaltyCore;`
-  // at the top of their own IIFEs.
-  // -----------------------------------------------------------------------
   window.SaltyCore = {
     STARTING_BALANCE,
     MAX_BET,
@@ -1039,6 +1050,10 @@
     goHome,
     renderHome,
     registeredGameKeys,
-    DEFAULT_ICON
+    DEFAULT_ICON,
+    getDb,
+    getAuthReady,
+    getUid,
+    isFirebaseConfigured
   };
 })();

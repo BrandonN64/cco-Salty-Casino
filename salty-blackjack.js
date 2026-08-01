@@ -16,7 +16,7 @@
   const {
     MIN_BET, MAX_BET, GAME_MODULES, OVERLAY_ID, LS_HANDLE,
     Balance, Shoe, bjHandValue, isBlackjack, isSplittablePair, cardColor, RANK_ORDER, SUIT_GLYPH,
-    clamp, delay, fmt, parseAmount, chipColor, renderBetControls, wireBetControls, toast,
+    clamp, delay, fmt, parseAmount, chipColor, chipStyle, CHIP_DENOMS, renderBetControls, wireBetControls, toast,
     getDb, getAuthReady, getUid, isFirebaseConfigured,
   } = window.SaltyCore;
 
@@ -46,6 +46,123 @@
     perfectPairs: { mixed: 5, colored: 12, perfect: 25 },
     twentyPlusThree: { flush: 5, straight: 10, threeKind: 30, straightFlush: 40, suitedTrips: 100 },
   };
+
+  // A small stack of casino chips representing a locked-in bet, sized by
+  // magnitude (more/taller chips for a bigger bet) and colored via the same
+  // chipColor() scale used for the pickable chip buttons, so a bet on the
+  // felt reads at a glance the same way the chip tray does. Shared by solo
+  // and live so a bet looks the same whichever mode you're in.
+  function chipStackHtml(amount, opts = {}) {
+    if (!amount || amount <= 0) return "";
+    const size = opts.size || 26;
+    const n = Math.min(5, Math.max(2, Math.round(Math.log10(amount + 1))));
+    const color = chipColor(amount);
+    const discs = Array.from({ length: n }, (_, i) => `
+      <div class="chip-stack-disc" style="width:${size}px;height:${size}px;margin-top:${i === 0 ? 0 : -Math.round(size * 0.6)}px;z-index:${i};
+        background:
+          radial-gradient(circle at 32% 28%, rgba(255,255,255,.55), rgba(255,255,255,0) 42%),
+          repeating-conic-gradient(from 0deg, ${color} 0deg 18deg, #ffffff22 18deg 22deg, ${color} 22deg 40deg),
+          ${color};"></div>`).join("");
+    return `<div class="chip-stack-wrap"><div class="chip-stack-discs">${discs}</div>${opts.hideLabel ? "" : `<div class="chip-stack-label">${fmt(amount)}</div>`}</div>`;
+  }
+
+  // The curved felt rules text every real table has printed on it — a
+  // gentle arc over the dealer's spot plus the two rule lines beneath.
+  // Purely decorative/informational (no click targets), and the actual
+  // numbers here are pulled from real constants so they can't drift out of
+  // sync with the real payouts/rules if those ever change.
+  function tableBannerHtml() {
+    const insurancePayoutRatio = "2 TO 1"; // seat.insuranceBet * 3 returned = stake + 2x profit
+    const blackjackPayoutRatio = "3 TO 2"; // hand.bet * 2.5 returned = stake + 1.5x profit
+    return `
+      <svg class="ov-banner" viewBox="0 0 640 140" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path id="ov-banner-arc" d="M 20,125 Q 320,15 620,125" fill="none"/>
+        <text class="ov-banner-main"><textPath href="#ov-banner-arc" startOffset="50%" text-anchor="middle">BLACKJACK PAYS ${blackjackPayoutRatio}</textPath></text>
+      </svg>
+      <div class="ov-banner-sub">Dealer must draw to 16 and stand on all 17s</div>
+      <div class="ov-banner-sub2">Insurance pays ${insurancePayoutRatio}</div>
+    `;
+  }
+
+  // The shoe (stack of face-down cards) and discard tray in the corners —
+  // purely atmospheric, reusing the existing card-back pattern so it
+  // matches the actual cards on the table.
+  function shoeDecorHtml() {
+    return `
+      <div class="ov-corner-deco ov-corner-left" aria-hidden="true">
+        <div class="card back ov-mini-card" style="transform:rotate(-8deg)"></div>
+        <div class="card back ov-mini-card" style="transform:rotate(-3deg);margin-left:-34px"></div>
+        <div class="card back ov-mini-card" style="margin-left:-34px"></div>
+      </div>
+      <div class="ov-corner-deco ov-corner-right" aria-hidden="true">
+        <div class="ov-discard-tray"></div>
+      </div>
+    `;
+  }
+
+  // Shared visual CSS for anything both solo and live use: side-bet chip
+  // badges, the card deal-in animation, the live timer text, the new
+  // chip-stack bet visuals, the felt rules banner, and the corner shoe/
+  // discard decorations. Previously the side-bet chip styling only lived in
+  // ensureLiveStyle() (called only by the live table), so solo's side-bet
+  // indicators rendered with no styling at all — this fixes that by giving
+  // both modes one shared style tag to inject.
+  function ensureBlackjackSharedStyle() {
+    if (document.getElementById("saltys-bj-shared-style")) return;
+    const s = document.createElement("style");
+    s.id = "saltys-bj-shared-style";
+    s.textContent = `
+      @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;600;700;800&family=JetBrains+Mono:wght@600;700;800&display=swap');
+
+      #${OVERLAY_ID} .lbj-card-deal{ animation: lbjDealIn .35s ease-out; }
+      @keyframes lbjDealIn{ from { transform: translateY(-30px) rotate(-8deg); opacity:0; } to { transform:none; opacity:1; } }
+      #${OVERLAY_ID} .lbj-timer{ font-family: "JetBrains Mono", monospace; font-weight:700; color:var(--gold-bright); }
+
+      #${OVERLAY_ID} .lbj-sidebet-row{ display:flex; gap:8px; margin-top:6px; }
+      #${OVERLAY_ID} .lbj-sidebet-row input{ width:70px; }
+      #${OVERLAY_ID} .lbj-sidebet-strip{ display:flex; gap:6px; margin-top:4px; justify-content:center; }
+      #${OVERLAY_ID} .lbj-sidebet-chip{
+        display:flex; flex-direction:column; align-items:center; justify-content:center;
+        width:40px; height:40px; border-radius:50%; border:2px solid #1a1400; position:relative;
+        background:
+          radial-gradient(circle at 32% 28%, rgba(255,255,255,.5), rgba(255,255,255,0) 42%),
+          repeating-conic-gradient(from 0deg, #7c3aed 0deg 16deg, #ffffff26 16deg 20deg, #7c3aed 20deg 36deg);
+        box-shadow:0 2px 5px rgba(0,0,0,.5);
+      }
+      #${OVERLAY_ID} .lbj-sidebet-chip.hit{ box-shadow:0 0 0 2px var(--success), 0 2px 8px rgba(47,191,113,.5); }
+      #${OVERLAY_ID} .lbj-sidebet-label{ font-size:8px; font-weight:800; color:#fff; text-transform:uppercase; letter-spacing:.3px; text-shadow:0 1px 2px rgba(0,0,0,.7); }
+      #${OVERLAY_ID} .lbj-sidebet-amt{ font:700 8px/1.2 "JetBrains Mono",monospace; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.7); }
+
+      /* --- chip stack: a bet sitting on the felt --- */
+      #${OVERLAY_ID} .chip-stack-wrap{ display:flex; flex-direction:column; align-items:center; gap:4px; }
+      #${OVERLAY_ID} .chip-stack-discs{ display:flex; flex-direction:column-reverse; align-items:center; }
+      #${OVERLAY_ID} .chip-stack-disc{ border-radius:50%; border:2px solid #1a1400; box-shadow:0 2px 4px rgba(0,0,0,.5), inset 0 0 0 2px rgba(255,255,255,.12); }
+      #${OVERLAY_ID} .chip-stack-label{ font:700 11px/1 "JetBrains Mono",monospace; color:var(--gold-bright); text-shadow:0 1px 3px rgba(0,0,0,.8); white-space:nowrap; }
+
+      /* --- felt rules banner (the curved "BLACKJACK PAYS 3 TO 2" text) --- */
+      #${OVERLAY_ID} .ov-banner{ position:absolute; top:1%; left:50%; transform:translateX(-50%); width:72%; max-width:560px; pointer-events:none; z-index:0; }
+      #${OVERLAY_ID} .ov-banner-main{ font:800 21px/1 "Oswald",sans-serif; letter-spacing:2.5px; fill:rgba(244,207,101,.5); }
+      #${OVERLAY_ID} .ov-banner-sub, #${OVERLAY_ID} .ov-banner-sub2{
+        position:absolute; left:50%; transform:translateX(-50%); width:80%; text-align:center;
+        font:700 9.5px/1.3 "Oswald",sans-serif; letter-spacing:1px; text-transform:uppercase;
+        color:rgba(244,207,101,.42); pointer-events:none; z-index:0; white-space:nowrap;
+      }
+      #${OVERLAY_ID} .ov-banner-sub{ top:15%; }
+      #${OVERLAY_ID} .ov-banner-sub2{ top:20.5%; }
+
+      /* --- corner shoe / discard tray decoration --- */
+      #${OVERLAY_ID} .ov-corner-deco{ position:absolute; top:3%; display:flex; align-items:center; z-index:0; opacity:.9; }
+      #${OVERLAY_ID} .ov-corner-left{ left:3%; }
+      #${OVERLAY_ID} .ov-corner-right{ right:3%; }
+      #${OVERLAY_ID} .ov-mini-card{ width:34px; height:48px; border-radius:4px; box-shadow:0 2px 5px rgba(0,0,0,.5); }
+      #${OVERLAY_ID} .ov-discard-tray{
+        width:52px; height:38px; border-radius:6px; border:2px solid rgba(74,47,20,.9);
+        background:linear-gradient(180deg, rgba(0,0,0,.25), rgba(0,0,0,.1));
+        box-shadow:inset 0 2px 6px rgba(0,0,0,.5);
+      }
+    `;
+    document.head.appendChild(s);
+  }
 
   function emptyHand() {
     return { cards: [], bet: 0, status: "active", result: null, acted: false, isSplitAces: false };
@@ -510,8 +627,8 @@
             </div>` : "";
           return `<div class="ov-subhand ${active ? "active" : ""}" style="opacity:${state.phase === "player" && !active ? 0.6 : 1}">
             <div class="ov-hand-ring"><div class="ov-hand">${hand.cards.map((c) => cardEl(c, false)).join("")}</div>${resultOverlay}</div>
-            <div class="ov-chipmark" title="${fmt(hand.bet)} tokens"></div>
-            <div class="ov-betlabel">${fmt(hand.bet)} · ${label}${hand.result ? " · " + hand.result : ""}</div>
+            ${chipStackHtml(hand.bet, { size: 20 })}
+            <div class="ov-betlabel">${label}${hand.result ? " · " + hand.result : ""}</div>
             ${soloSideBetHtml}${winBadge}${profitLabel}
           </div>`;
         }).join("");
@@ -536,6 +653,8 @@
         </div>` : "";
 
       return `<div class="ov-wrap"><div class="ov-table">
+          ${tableBannerHtml()}
+          ${shoeDecorHtml()}
           <div class="ov-dealer">
             ${dealerShown ? `<div class="ov-dealer-total">${dealerShown.total}${dealerShown.soft ? "s" : ""}</div>` : ""}
             <div class="ov-dealer-hand">${state.dealer.map((c, i) => cardEl(c, state.dealerHoleHidden && i === 1)).join("")}</div>
@@ -548,6 +667,7 @@
 
     function render() {
       if (!root) return;
+      ensureBlackjackSharedStyle();
       if (state.phase === "betting") {
         const seatPickHtml = SEAT_POS.map((pos, i) => {
           const picked = state.selectedSeats.includes(i);
@@ -796,11 +916,18 @@
         return;
       }
       if (t.phase === "player-turns") {
+        const expired = t.phaseDeadline && now >= t.phaseDeadline;
+        if (!expired) return;
+        // Normal case: nobody acted before the timer ran out — auto-stand.
+        // Fallback case: the hand was already resolved (bust/stand/double/
+        // split-aces) but, for whatever reason (e.g. the acting client lost
+        // its connection right after committing), the turn never advanced.
+        // Either way, once the deadline is up there's nothing left to wait
+        // on, so move play along.
         const seat = t.seats[t.turnSeatIndex];
         const hand = seat && seat.hands[t.turnHandIndex];
-        const expired = t.phaseDeadline && now >= t.phaseDeadline;
-        if ((!seat || seat.status !== "active" || !hand || hand.status !== "active") && expired) return;
-        if (expired && hand && hand.status === "active") { hand.status = "stood"; await advanceTurn(t); }
+        if (hand && hand.status === "active") hand.status = "stood";
+        await advanceTurn(t);
       }
     }
 
@@ -903,6 +1030,8 @@
       if (mySeatIndex < 0 || busy) return;
       busy = true;
       let debit = 0;
+      let committedT = null;
+      let needsAdvance = false;
       try {
         await getDb().runTransaction(async (tx) => {
           const t = (await tx.get(tref())).data();
@@ -940,13 +1069,21 @@
             if (isAces) newHand2.status = "stood";
             seat.hands.splice(hi + 1, 0, newHand2);
           }
+          needsAdvance = hand.status !== "active";
           t.phaseDeadline = Date.now() + LIVE_BJ_TURN_MS;
           tx.set(tref(), t);
+          committedT = t;
         });
         if (debit > 0) await Balance.applyDelta(-debit, action === "double" ? "live_bj_double" : "live_bj_split");
+        // Standing, busting, doubling, or auto-resolved split aces all end this
+        // hand's turn — move play on to the next hand/seat (or to the dealer if
+        // that was the last one). A plain hit that doesn't bust leaves the hand
+        // active, so needsAdvance stays false and the same player keeps acting.
+        if (needsAdvance && committedT) await advanceTurn(committedT);
       } catch (e) { toast("Action failed: " + e.message); }
       busy = false;
     }
+
 
     function seatHasPlayableHand(seat) { return seat && seat.status === "active" && seat.hands.some((h) => h.status === "active"); }
 
@@ -1055,13 +1192,17 @@
         #${OVERLAY_ID} .lbj-oval-table{
           position:relative; width:100%; max-width:900px; margin:0 auto; aspect-ratio:16/9;
           background:
-            radial-gradient(ellipse at 50% 10%, rgba(255,255,255,.05), rgba(255,255,255,0) 30%),
-            radial-gradient(ellipse at 50% 15%, var(--felt-line, #1c5c46), var(--felt, #0e3b2c) 70%);
-          border-radius:50%/45%; border:10px solid #1a120a;
-          outline:2px solid #3a2410; outline-offset:-6px;
-          box-shadow:inset 0 0 70px rgba(0,0,0,.55), inset 0 0 0 3px rgba(212,175,55,.12), 0 10px 30px rgba(0,0,0,.35);
+            radial-gradient(ellipse at 50% 12%, rgba(255,255,255,.07), rgba(255,255,255,0) 32%),
+            radial-gradient(ellipse at 50% 100%, rgba(0,0,0,.35), rgba(0,0,0,0) 55%),
+            radial-gradient(ellipse at 50% 15%, var(--felt-line, #1c5c46), var(--felt, #0e3b2c) 72%);
+          border-radius:50%/45%; border:10px solid #2a1608;
+          outline:2px solid #4a2f14; outline-offset:-6px;
+          box-shadow:
+            inset 0 0 70px rgba(0,0,0,.55), inset 0 0 0 3px rgba(212,175,55,.12),
+            inset 0 0 0 13px rgba(74,47,20,.45), inset 0 0 0 15px rgba(0,0,0,.3),
+            0 10px 30px rgba(0,0,0,.35), 0 0 0 4px #1a0f05, 0 0 0 6px #3d2410;
         }
-        #${OVERLAY_ID} .lbj-oval-dealer{ position:absolute; top:8%; left:50%; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; gap:4px; }
+        #${OVERLAY_ID} .lbj-oval-dealer{ position:absolute; top:8%; left:50%; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; gap:4px; z-index:1; }
         #${OVERLAY_ID} .lbj-oval-seats{ position:relative; margin-top:-40px; display:grid; grid-template-columns:repeat(5,1fr); gap:16px; padding:0 14px; }
         #${OVERLAY_ID} .lbj-seat{
           background:linear-gradient(180deg, rgba(28,34,44,.92), rgba(15,18,24,.92));
@@ -1073,28 +1214,8 @@
         #${OVERLAY_ID} .lbj-seat.turn{ box-shadow:0 0 0 2px #d4af37, 0 0 18px rgba(212,175,55,.5); transform:translateY(-4px); }
         #${OVERLAY_ID} .lbj-seat.win{ box-shadow:0 0 0 2px #2fbf71; }
         #${OVERLAY_ID} .lbj-seat.lose{ opacity:.6; }
-        #${OVERLAY_ID} .lbj-chip-stack{ display:flex; align-items:flex-end; gap:2px; height:26px; }
-        #${OVERLAY_ID} .lbj-chip{
-          width:20px; height:20px; border-radius:50%; border:2px solid #1a1400; margin-bottom:-14px;
-          box-shadow:0 2px 4px rgba(0,0,0,.55), inset 0 0 0 2px rgba(255,255,255,.15);
-          background-image: repeating-conic-gradient(from 0deg, currentColor 0deg 16deg, #ffffff33 16deg 20deg);
-        }
         #${OVERLAY_ID} .lbj-behind-row{ display:flex; align-items:center; gap:4px; margin-top:6px; flex-wrap:wrap; }
         #${OVERLAY_ID} .lbj-behind-avatar{ width:20px; height:20px; border-radius:50%; background:#7c3aed; color:#fff; font-size:10px; display:flex; align-items:center; justify-content:center; font-weight:700; border:1px solid #1a1400; }
-        #${OVERLAY_ID} .lbj-card-deal{ animation: lbjDealIn .35s ease-out; }
-        @keyframes lbjDealIn{ from { transform: translateY(-30px) rotate(-8deg); opacity:0; } to { transform:none; opacity:1; } }
-        #${OVERLAY_ID} .lbj-sidebet-row{ display:flex; gap:8px; margin-top:6px; }
-        #${OVERLAY_ID} .lbj-sidebet-row input{ width:70px; }
-        #${OVERLAY_ID} .lbj-timer{ font-family: "JetBrains Mono", monospace; font-weight:700; color:var(--gold-bright); }
-        #${OVERLAY_ID} .lbj-sidebet-strip{ display:flex; flex-direction:column; gap:4px; margin-top:2px; }
-        #${OVERLAY_ID} .lbj-sidebet-chip{
-          display:flex; flex-direction:column; align-items:center; justify-content:center;
-          width:44px; height:44px; border-radius:8px; background:var(--panel-2); border:1px solid var(--border);
-          box-shadow:inset 0 0 0 1px rgba(255,255,255,.04);
-        }
-        #${OVERLAY_ID} .lbj-sidebet-chip.hit{ border-color:var(--success); box-shadow:0 0 0 1px var(--success), 0 0 10px rgba(47,191,113,.4); }
-        #${OVERLAY_ID} .lbj-sidebet-label{ font-size:9px; font-weight:800; color:var(--text-dim); text-transform:uppercase; letter-spacing:.5px; }
-        #${OVERLAY_ID} .lbj-sidebet-amt{ font:700 10px/1.2 "JetBrains Mono",monospace; color:var(--gold-bright); }
       `;
       document.head.appendChild(s);
     }
@@ -1108,6 +1229,18 @@
     function secondsLeft() {
       if (!tableDoc || !tableDoc.phaseDeadline) return null;
       return Math.max(0, Math.ceil((tableDoc.phaseDeadline - Date.now()) / 1000));
+    }
+    // renderInner() only runs when Firestore actually pushes a new snapshot,
+    // so without this the on-screen "Xs" text just sits frozen between
+    // writes instead of counting down. This runs every second regardless,
+    // updating only the timer spans' text (by class, renderInner() already
+    // tags them "lbj-timer") so it doesn't disturb anything else — an
+    // in-progress chat message or bet amount the player is mid-typing.
+    function updateTimerDisplay() {
+      if (!root || !tableDoc) return;
+      const secs = secondsLeft();
+      const text = secs !== null ? `${secs}s` : "";
+      root.querySelectorAll(".lbj-timer").forEach((el) => { el.textContent = text; });
     }
     function missedWarningBadge(seat) {
       if (!seat.missedRounds) return "";
@@ -1139,7 +1272,13 @@
         const v = bjHandValue(hand.cards);
         const label = hand.status === "bust" ? `${v.total} Bust` : hand.cards.length ? `${v.total}${v.soft ? "s" : ""}` : "";
         const resultBadge = hand.result ? `<span class="pill ${hand.profit > 0 ? "win" : hand.profit < 0 ? "lose" : ""}">${hand.result}${hand.profit != null ? " " + (hand.profit >= 0 ? "+" : "") + fmt(hand.profit) : ""}</span>` : "";
-        return `<div class="col" style="opacity:${active ? 1 : 0.75}"><div class="hand">${hand.cards.map((c) => cardEl(c, false)).join("")}</div><div class="row" style="justify-content:space-between"><span class="muted">${fmt(hand.bet)} · ${label}</span>${resultBadge}</div></div>`;
+        return `<div class="col" style="opacity:${active ? 1 : 0.75}">
+          <div class="hand">${hand.cards.map((c) => cardEl(c, false)).join("")}</div>
+          <div class="row" style="justify-content:space-between;align-items:center">
+            <div class="row" style="align-items:center;gap:8px">${chipStackHtml(hand.bet, { size: 18 })}<span class="muted" style="font-size:11px">${label}</span></div>
+            ${resultBadge}
+          </div>
+        </div>`;
       }).join("") : "";
       const behindTotal = seat.behindBets.reduce((s, b) => s + b.amount, 0);
       const behindHtml = seat.behindBets.length ? `<div class="lbj-behind-row">${seat.behindBets.map((b) => `<div class="lbj-behind-avatar" title="${b.name}: ${fmt(b.amount)}${b.result ? " · " + b.result : ""}">${b.name[0]}</div>`).join("")}<span class="muted" style="font-size:11px">${fmt(behindTotal)} behind</span></div>` : "";
@@ -1182,6 +1321,7 @@
     function renderInner() {
       if (!root || !tableDoc) return;
       ensureLiveStyle();
+      ensureBlackjackSharedStyle();
       const dealerHtml = tableDoc.dealer.map((c, i) => cardEl(c, i > 0 && tableDoc.dealerHoleHidden)).join("");
       const seatsHtml = tableDoc.seats.map((s, i) => seatHtml(s, i)).join("");
       const seat = tableDoc.seats[mySeatIndex];
@@ -1217,6 +1357,8 @@
         </div>
         <div class="lbj-oval-wrap mt8">
           <div class="lbj-oval-table">
+            ${tableBannerHtml()}
+            ${shoeDecorHtml()}
             <div class="lbj-oval-dealer">
               <div class="ov-dealer-hand" style="justify-content:center">${dealerHtml}</div>
               <div class="ov-dealer-label">Dealer's Cards</div>
@@ -1285,7 +1427,7 @@
         }
         unsubTable = tref().onSnapshot((snap) => { tableDoc = snap.data(); renderInner(); });
         unsubChat = chatRef().orderBy("at", "desc").limit(30).onSnapshot((qs) => { chatMessages = qs.docs.map((d) => d.data()).reverse(); renderInner(); });
-        tickTimer = setInterval(() => { tick(); }, 1000);
+        tickTimer = setInterval(() => { tick(); updateTimerDisplay(); }, 1000);
         return () => { if (unsubTable) unsubTable(); if (unsubChat) unsubChat(); if (tickTimer) clearInterval(tickTimer); root = null; };
       },
     };

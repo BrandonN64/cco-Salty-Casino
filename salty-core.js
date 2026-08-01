@@ -668,13 +668,17 @@
         position:relative; width:100%; max-width:1260px; margin:0 auto;
         aspect-ratio: 16/9;
         background:
-          radial-gradient(ellipse at 50% 10%, rgba(255,255,255,.06), rgba(255,255,255,0) 30%),
-          radial-gradient(ellipse at 50% 15%, var(--felt-line), var(--felt) 70%);
+          radial-gradient(ellipse at 50% 12%, rgba(255,255,255,.08), rgba(255,255,255,0) 32%),
+          radial-gradient(ellipse at 50% 100%, rgba(0,0,0,.35), rgba(0,0,0,0) 55%),
+          radial-gradient(ellipse at 50% 15%, var(--felt-line), var(--felt) 72%);
         border-radius:50%/45%;
-        border:14px solid #1a120a;
-        outline:3px solid #3a2410;
-        outline-offset:-8px;
-        box-shadow:inset 0 0 90px rgba(0,0,0,.55), inset 0 0 0 4px rgba(212,175,55,.15), 0 14px 40px rgba(0,0,0,.4);
+        border:16px solid #2a1608;
+        outline:3px solid #4a2f14;
+        outline-offset:-10px;
+        box-shadow:
+          inset 0 0 90px rgba(0,0,0,.55), inset 0 0 0 4px rgba(212,175,55,.15),
+          inset 0 0 0 18px rgba(74,47,20,.4), inset 0 0 0 20px rgba(0,0,0,.3),
+          0 14px 40px rgba(0,0,0,.4), 0 0 0 6px #1a0f05, 0 0 0 9px #3d2410;
       }
       #${OVERLAY_ID} .ov-dealer{
         position:absolute; top:8%; left:50%; transform:translateX(-50%);

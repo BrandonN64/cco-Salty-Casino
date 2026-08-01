@@ -678,6 +678,8 @@
           </div>`;
         }).join("");
         root.innerHTML = `<div class="ov-wrap"><div class="ov-table">
+            ${tableBannerHtml()}
+            ${shoeDecorHtml()}
             <div class="ov-dealer"><div class="ov-dealer-hand"></div><div class="ov-dealer-label">Dealer's Cards</div></div>
             <div class="ov-hint">Click a seat to play that hand</div>
             ${seatPickHtml}

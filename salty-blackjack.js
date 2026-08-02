@@ -46,22 +46,42 @@
     perfectPairs: { mixed: 5, colored: 12, perfect: 25 },
     twentyPlusThree: { flush: 5, straight: 10, threeKind: 30, straightFlush: 40, suitedTrips: 100 },
   };
+  const DEALER_STANDS_SOFT_17 = true;
+  const SURRENDER_RETURN_FRACTION = 0.5; // late surrender: forfeit half the bet, hand ends immediately
 
-  // A small stack of casino chips representing a locked-in bet, sized by
-  // magnitude (more/taller chips for a bigger bet) and colored via the same
-  // chipColor() scale used for the pickable chip buttons, so a bet on the
-  // felt reads at a glance the same way the chip tray does. Shared by solo
-  // and live so a bet looks the same whichever mode you're in.
+  // chipColor() (core.js) is tiered for the CHIP_DENOMS scale (100k-100M),
+  // which makes sense for the pickable chip buttons but not for a bet
+  // stack: with a 10,000 starting balance, nearly every real bet falls in
+  // chipColor's lowest bucket and renders as the same green every time.
+  // This scale is tuned to how big a bet actually looks relative to a
+  // normal balance instead.
+  function chipStackColor(amount) {
+    if (amount >= 10_000) return "#7c3aed"; // purple — a full starting balance or more
+    if (amount >= 2_500) return "#1a1a1a"; // black
+    if (amount >= 1_000) return "#c0392b"; // red
+    if (amount >= 250) return "#1d6fd6"; // blue
+    if (amount >= 50) return "#2fbf71"; // green
+    return "#e8e4d8"; // white/cream — small change
+  }
+
+  // A small fan of casino chips representing a locked-in bet, sized by
+  // magnitude (more chips for a bigger bet) and colored via
+  // chipStackColor() above. Fanned horizontally rather than stacked
+  // vertically — a vertical stack built from negative top-margins can
+  // creep upward with no fixed ceiling and end up overlapping whatever
+  // sits above it (the cards); a horizontal fan only ever grows sideways
+  // in its own row, so it can't intrude on the hand above it. Shared by
+  // solo and live so a bet looks the same whichever mode you're in.
   function chipStackHtml(amount, opts = {}) {
     if (!amount || amount <= 0) return "";
-    const size = opts.size || 26;
-    const n = Math.min(5, Math.max(2, Math.round(Math.log10(amount + 1))));
-    const color = chipColor(amount);
+    const size = opts.size || 24;
+    const n = Math.min(4, Math.max(1, Math.round(Math.log10(Math.max(amount, 1)) - 0.5)));
+    const color = chipStackColor(amount);
     const discs = Array.from({ length: n }, (_, i) => `
-      <div class="chip-stack-disc" style="width:${size}px;height:${size}px;margin-top:${i === 0 ? 0 : -Math.round(size * 0.6)}px;z-index:${i};
+      <div class="chip-stack-disc" style="width:${size}px;height:${size}px;${i > 0 ? `margin-left:-${Math.round(size * 0.55)}px;` : ""}
         background:
           radial-gradient(circle at 32% 28%, rgba(255,255,255,.55), rgba(255,255,255,0) 42%),
-          repeating-conic-gradient(from 0deg, ${color} 0deg 18deg, #ffffff22 18deg 22deg, ${color} 22deg 40deg),
+          repeating-conic-gradient(from 0deg, ${color} 0deg 18deg, #ffffff26 18deg 22deg, ${color} 22deg 40deg),
           ${color};"></div>`).join("");
     return `<div class="chip-stack-wrap"><div class="chip-stack-discs">${discs}</div>${opts.hideLabel ? "" : `<div class="chip-stack-label">${fmt(amount)}</div>`}</div>`;
   }
@@ -100,6 +120,75 @@
     `;
   }
 
+  // A small "Rules" button, meant to sit right above the table in both
+  // modes. Rendered fresh every time (same as everything else here), so
+  // callers need to re-wire its click handler after each render — same
+  // pattern as every other button in this file.
+  function rulesButtonRowHtml() {
+    return `<div class="row" style="justify-content:flex-end;margin-bottom:6px"><button class="btn small" id="saltys-bj-rules-btn">📖 House Rules</button></div>`;
+  }
+  function wireRulesButton(root) {
+    const btn = root && root.querySelector("#saltys-bj-rules-btn");
+    if (btn) btn.addEventListener("click", showRulesModal);
+  }
+
+  // The rules explainer. Wording is generated from the real constants
+  // (DEALER_STANDS_SOFT_17, SURRENDER_RETURN_FRACTION, SIDE_BET_PAYTABLES)
+  // instead of being hand-typed, so if those ever change the printed rules
+  // can't quietly fall out of sync with what the game actually does.
+  function showRulesModal() {
+    if (document.getElementById("saltys-bj-rules")) return;
+    const el = document.createElement("div");
+    el.id = "saltys-bj-rules";
+    const surrenderPct = Math.round(SURRENDER_RETURN_FRACTION * 100);
+    el.innerHTML = `
+      <div class="box">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <h2>House Rules</h2>
+          <button class="btn small" id="saltys-bj-rules-close-x">✕</button>
+        </div>
+        <div class="rules-body">
+          <h3>How a round works</h3>
+          <p>Place a bet, then you and the dealer each get two cards. Yours are dealt face up; one of the dealer's is dealt face down until every player has finished acting. You then choose to hit, stand, double down, split, or surrender. Once everyone's done, the dealer reveals their hidden card and plays out their hand by a fixed set of rules — no decisions, just the rules below — and bets are paid or collected.</p>
+
+          <h3>Card values</h3>
+          <p>Number cards are worth their number, face cards (J/Q/K) are worth 10, and an Ace is worth 11 or 1 — whichever keeps your hand at 21 or under.</p>
+
+          <h3>Blackjack</h3>
+          <p>An Ace plus any 10-value card as your first two cards is a natural blackjack. It pays <b>3 to 2</b> and settles immediately — unless the dealer also has blackjack, in which case it's a push (your bet back, no profit). A 21 reached any other way (after a hit, or on a split hand) is just a strong 21, paid at the normal 1:1 win rate, not the blackjack bonus.</p>
+
+          <h3>Dealer rules</h3>
+          <p>The dealer must draw to 16 and stand on all 17s${DEALER_STANDS_SOFT_17 ? ", including a <b>soft 17</b> (a hand with an Ace counted as 11, like Ace+6)" : " — except a soft 17, which the dealer is required to hit"}. This is fixed; the dealer never chooses.</p>
+
+          <h3>Doubling down</h3>
+          <p>On your first two cards, you can double your bet in exchange for exactly one more card, then your turn ends automatically.</p>
+
+          <h3>Splitting</h3>
+          <p>If your first two cards match in value (like two 8s, or a 10 and a King), you can split them into two separate hands, each getting its own additional card and its own bet equal to your original. Splitting Aces deals exactly one more card to each and ends your turn immediately on both.</p>
+
+          <h3>Surrender</h3>
+          <p>Before taking any other action on a hand — no hits, no double, no split — you can surrender it: the hand ends immediately and you get <b>${surrenderPct}%</b> of that bet back. Not available on a hand created by splitting.</p>
+
+          <h3>Insurance</h3>
+          <p>If the dealer's face-up card is an Ace, you're offered insurance for up to half your original bet. It pays <b>2 to 1</b> if the dealer does have blackjack, covering the loss on your main hand; if the dealer doesn't, the insurance bet is simply lost.</p>
+
+          <h3>Side bets</h3>
+          <p>Placed before the deal, alongside your main bet:</p>
+          <p><b>Perfect Pairs</b> — pays out if your first two cards are a pair (same rank), scaling up for a same-color pair or an exact suited match.</p>
+          <p><b>21+3</b> — pays out if your two cards plus the dealer's face-up card form a poker hand: a flush, straight, three of a kind, straight flush, or suited trips.</p>
+        </div>
+        <div class="row" style="justify-content:flex-end;margin-top:16px">
+          <button class="btn primary" id="saltys-bj-rules-close">Got it</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(el);
+    const close = () => el.remove();
+    el.querySelector("#saltys-bj-rules-close").addEventListener("click", close);
+    el.querySelector("#saltys-bj-rules-close-x").addEventListener("click", close);
+    el.addEventListener("click", (e) => { if (e.target === el) close(); });
+  }
+
   // Shared visual CSS for anything both solo and live use: side-bet chip
   // badges, the card deal-in animation, the live timer text, the new
   // chip-stack bet visuals, the felt rules banner, and the corner shoe/
@@ -135,8 +224,8 @@
 
       /* --- chip stack: a bet sitting on the felt --- */
       #${OVERLAY_ID} .chip-stack-wrap{ display:flex; flex-direction:column; align-items:center; gap:4px; }
-      #${OVERLAY_ID} .chip-stack-discs{ display:flex; flex-direction:column-reverse; align-items:center; }
-      #${OVERLAY_ID} .chip-stack-disc{ border-radius:50%; border:2px solid #1a1400; box-shadow:0 2px 4px rgba(0,0,0,.5), inset 0 0 0 2px rgba(255,255,255,.12); }
+      #${OVERLAY_ID} .chip-stack-discs{ display:flex; flex-direction:row; align-items:center; }
+      #${OVERLAY_ID} .chip-stack-disc{ border-radius:50%; border:2px solid #1a1400; flex-shrink:0; box-shadow:0 2px 4px rgba(0,0,0,.5), inset 0 0 0 2px rgba(255,255,255,.12); }
       #${OVERLAY_ID} .chip-stack-label{ font:700 11px/1 "JetBrains Mono",monospace; color:var(--gold-bright); text-shadow:0 1px 3px rgba(0,0,0,.8); white-space:nowrap; }
 
       /* --- felt rules banner (the curved "BLACKJACK PAYS 3 TO 2" text) --- */
@@ -160,19 +249,34 @@
         background:linear-gradient(180deg, rgba(0,0,0,.25), rgba(0,0,0,.1));
         box-shadow:inset 0 2px 6px rgba(0,0,0,.5);
       }
+
+      /* --- rules modal (appended to document.body, like the disclaimer) --- */
+      #saltys-bj-rules{
+        position:fixed; inset:0; z-index:100002; display:flex; align-items:center; justify-content:center;
+        background:rgba(0,0,0,.75); font:14px/1.6 Inter,system-ui,sans-serif;
+      }
+      #saltys-bj-rules .box{
+        max-width:560px; max-height:82vh; overflow-y:auto; margin:20px; background:#12161d;
+        border:1px solid #3a2c0f; border-radius:16px; padding:26px 24px; color:#f4f1ea;
+      }
+      #saltys-bj-rules h2{ margin:0; font:800 20px/1.2 Oswald,Inter,sans-serif; color:#f4cf65; }
+      #saltys-bj-rules h3{ margin:18px 0 6px; font:700 13px/1.2 Oswald,Inter,sans-serif; color:#f4cf65; text-transform:uppercase; letter-spacing:.5px; }
+      #saltys-bj-rules h3:first-of-type{ margin-top:6px; }
+      #saltys-bj-rules p{ margin:0 0 8px; color:#c7cdd6; font-size:13px; }
+      #saltys-bj-rules b{ color:#f4f1ea; }
     `;
     document.head.appendChild(s);
   }
 
   function emptyHand() {
-    return { cards: [], bet: 0, status: "active", result: null, acted: false, isSplitAces: false };
+    return { cards: [], bet: 0, status: "active", result: null, acted: false, isSplitAces: false, paid: false, fromSplit: false };
   }
   function emptySeat() {
     return {
       uid: null, name: null, status: "empty", hands: [], activeHandIndex: 0,
-      sideBets: { perfectPairs: 0, twentyPlusThree: 0 }, sideBetResults: {},
+      sideBets: { perfectPairs: 0, twentyPlusThree: 0 }, sideBetResults: {}, sideBetsPaid: false,
       behindBets: [], joinedAt: null, missedRounds: 0,
-      insuranceBet: 0, insuranceDeclined: false,
+      insuranceBet: 0, insuranceDeclined: false, insurancePaid: false,
     };
   }
   function freshLiveTable(tableId) {
@@ -390,7 +494,6 @@
   ];
   const SoloBlackjackMulti = (function () {
     const MAX_HANDS = 5;
-    const DEALER_STANDS_SOFT_17 = true;
     const SOLO_DEAL_CARD_MS = 450;
     let root = null, shoe = null, state = null, busy = false;
     const dealtAnimated = new Set();
@@ -449,6 +552,26 @@
         if (hand.sideBets.twentyPlusThree > 0) hand.sideBetResults.twentyPlusThree = evalTwentyPlusThree(hand.cards, state.dealer[0]);
       }
       state.insuranceOffered = state.dealer[0].r === "A";
+
+      // A natural blackjack is locked in immediately — it's never offered
+      // hit/double/split — and pays out right away rather than waiting
+      // until every other hand at the table finishes. Each hand is judged
+      // independently, so playing several seats at once doesn't disable
+      // this for any of them.
+      const dealerBJ = isBlackjack(state.dealer);
+      for (const hand of state.hands) {
+        if (!isBlackjack(hand.cards)) continue;
+        hand.acted = true;
+        if (dealerBJ) {
+          hand.status = "push"; hand.result = "push"; hand.profit = 0;
+          await Balance.applyDelta(hand.bet, "solo_bj_instant_push");
+        } else {
+          hand.status = "blackjack"; hand.result = "blackjack"; hand.profit = Math.round(hand.bet * 1.5);
+          await Balance.applyDelta(hand.bet + hand.profit, "solo_bj_instant_blackjack");
+        }
+      }
+      advanceIfResolved();
+
       busy = false;
       render();
     }
@@ -501,9 +624,11 @@
         const isAces = c0.r === "A";
         const newH = newHand([c1], hand.bet, 0, 0, hand.seatIdx);
         newH.isSplitAces = isAces;
+        newH.fromSplit = true;
         hand.cards = [c0];
         hand.isSplitAces = isAces;
         hand.acted = true;
+        hand.fromSplit = true;
         state.hands.splice(state.activeHandIndex + 1, 0, newH);
         render();
         await delay(SOLO_DEAL_CARD_MS);
@@ -514,6 +639,11 @@
         render();
         await delay(SOLO_DEAL_CARD_MS);
         if (isAces) { hand.status = "stood"; newH.status = "stood"; }
+      } else if (action === "surrender") {
+        if (hand.acted || hand.cards.length !== 2 || hand.fromSplit) { busy = false; render(); return; }
+        await Balance.applyDelta(Math.round(hand.bet * SURRENDER_RETURN_FRACTION), "solo_bj_surrender");
+        hand.status = "surrender"; hand.result = "surrender"; hand.acted = true;
+        hand.profit = -Math.round(hand.bet * (1 - SURRENDER_RETURN_FRACTION));
       }
       advanceIfResolved();
       busy = false;
@@ -529,8 +659,7 @@
       if (anyLive) {
         while (true) {
           const { total, soft } = bjHandValue(state.dealer);
-          if (total > 21 || total > 17 || (total === 17 && !soft)) break;
-          if (total === 17 && soft && !DEALER_STANDS_SOFT_17 && total < 17) continue;
+          if (total > 21 || total > 17 || (total === 17 && (!soft || DEALER_STANDS_SOFT_17))) break;
           state.dealer.push(shoe.draw());
           render();
           await delay(SOLO_DEAL_CARD_MS);
@@ -547,19 +676,20 @@
       let totalProfit = 0;
       for (const hand of state.hands) {
         let payout = 0;
-        if (hand.status === "bust") { hand.result = "lose"; }
+        if (hand.result != null) {
+          // Already resolved and paid instantly at deal time (natural
+          // blackjack or a push against a dealer blackjack) — don't
+          // re-settle or re-pay it here.
+        } else if (hand.status === "bust") { hand.result = "lose"; }
         else {
           const val = bjHandValue(hand.cards).total;
-          const playerBJ = isBlackjack(hand.cards) && !hand.isSplitAces && state.hands.length === 1;
-          if (playerBJ && dealerBJ) { hand.result = "push"; payout = hand.bet; }
-          else if (playerBJ) { hand.result = "blackjack"; payout = Math.round(hand.bet * 2.5); }
-          else if (dealerBJ) { hand.result = "lose"; }
+          if (dealerBJ) { hand.result = "lose"; }
           else if (dealerBust || val > dealerVal) { hand.result = "win"; payout = hand.bet * 2; }
           else if (val === dealerVal) { hand.result = "push"; payout = hand.bet; }
           else { hand.result = "lose"; }
         }
         if (payout > 0) await Balance.applyDelta(payout, "solo_bj_settle_multi");
-        hand.profit = payout - hand.bet;
+        if (hand.profit == null) hand.profit = payout - hand.bet;
 
         const pp = hand.sideBets && hand.sideBets.perfectPairs;
         const tw = hand.sideBets && hand.sideBets.twentyPlusThree;
@@ -673,11 +803,11 @@
           const picked = state.selectedSeats.includes(i);
           return `<div class="ov-seat" data-seat="${i}" style="left:${pos.left}%;top:${pos.top}%;cursor:pointer">
             <div class="ov-cardslot ${picked ? "" : "empty"}" style="transform:rotate(${pos.rotate});${picked ? "border-color:var(--gold)" : ""}"></div>
-            <div class="ov-chipmark ${picked ? "" : "empty"}"></div>
+            <div style="min-height:34px;display:flex;align-items:flex-end;justify-content:center">${picked ? chipStackHtml(state.betPerHand, { size: 18 }) : ""}</div>
             <div class="ov-avatar ${picked ? "you" : "empty"}">${picked ? "You" : "?"}</div>
           </div>`;
         }).join("");
-        root.innerHTML = `<div class="ov-wrap"><div class="ov-table">
+        root.innerHTML = rulesButtonRowHtml() + `<div class="ov-wrap"><div class="ov-table">
             ${tableBannerHtml()}
             ${shoeDecorHtml()}
             <div class="ov-dealer"><div class="ov-dealer-hand"></div><div class="ov-dealer-label">Dealer's Cards</div></div>
@@ -695,6 +825,7 @@
             <div class="muted">Total wager: ${fmt((state.betPerHand + (state.sidePPPerHand || 0) + (state.side21PerHand || 0)) * state.selectedSeats.length)}</div>
             <button class="btn primary" id="sbj-deal" ${busy || !state.selectedSeats.length ? "disabled" : ""}>Deal</button>
           </div>`;
+        wireRulesButton(root);
         root.querySelectorAll("[data-seat]").forEach((el) => el.addEventListener("click", () => {
           const i = parseInt(el.dataset.seat, 10);
           const idx = state.selectedSeats.indexOf(i);
@@ -725,23 +856,27 @@
         const hand = currentHand();
         const canDouble = hand && hand.cards.length === 2 && !hand.acted && Balance.current >= hand.bet;
         const canSplit = hand && hand.cards.length === 2 && !hand.acted && isSplittablePair(hand.cards[0], hand.cards[1]) && Balance.current >= hand.bet;
+        const canSurrender = hand && hand.cards.length === 2 && !hand.acted && !hand.fromSplit;
         controls = `<div class="row center">
           <button class="btn primary" id="sbj-hit" ${busy ? "disabled" : ""}>Hit</button>
           <button class="btn" id="sbj-stand" ${busy ? "disabled" : ""}>Stand</button>
           <button class="btn" id="sbj-double" ${busy || !canDouble ? "disabled" : ""} title="${!canDouble && hand && Balance.current < hand.bet ? "Not enough balance to double" : ""}">Double</button>
           <button class="btn" id="sbj-split" ${busy || !canSplit ? "disabled" : ""}>Split</button>
+          <button class="btn" id="sbj-surrender" ${busy || !canSurrender ? "disabled" : ""} title="Forfeit the hand, get half your bet back">Surrender</button>
         </div>`;
       } else if (state.phase === "settled") {
         controls = `<div class="center"><button class="btn primary" id="sbj-again">Play Again</button></div>`;
       } else {
         controls = `<div class="center muted">Dealer playing…</div>`;
       }
-      root.innerHTML = renderSoloOvalTable() + `<div class="mt16">${controls}</div>`;
+      root.innerHTML = rulesButtonRowHtml() + renderSoloOvalTable() + `<div class="mt16">${controls}</div>`;
+      wireRulesButton(root);
       if (state.phase === "player") {
         root.querySelector("#sbj-hit").addEventListener("click", () => act("hit"));
         root.querySelector("#sbj-stand").addEventListener("click", () => act("stand"));
         root.querySelector("#sbj-double").addEventListener("click", () => act("double"));
         root.querySelector("#sbj-split").addEventListener("click", () => act("split"));
+        root.querySelector("#sbj-surrender").addEventListener("click", () => act("surrender"));
         const insYes = root.querySelector("#sbj-insurance-yes");
         if (insYes) insYes.addEventListener("click", takeInsurance);
         const insNo = root.querySelector("#sbj-insurance-no");
@@ -851,7 +986,7 @@
           const seat = t.seats[seatIdx];
           if (!seat || seat.status === "empty") throw new Error("no-seat");
           if (seat.behindBets.some((b) => b.uid === myUid())) throw new Error("already-behind");
-          seat.behindBets.push({ uid: myUid(), name: localStorage.getItem(LS_HANDLE) || "Player", amount, result: null });
+          seat.behindBets.push({ uid: myUid(), name: localStorage.getItem(LS_HANDLE) || "Player", amount, result: null, paid: false });
           tx.set(tref(), t);
         });
         await Balance.applyDelta(-amount, "live_bj_behind");
@@ -967,32 +1102,7 @@
       t.phaseDeadline = Date.now() + LIVE_BJ_TURN_MS;
       await tref().set(t);
 
-      payoutSideBets(t).catch(() => {});
-      payoutInstantBlackjacks(t).catch(() => {});
       if (t.turnSeatIndex < 0) await advanceTurn(t);
-    }
-
-    async function payoutInstantBlackjacks(t) {
-      for (const seat of t.seats) {
-        if (seat.uid !== myUid() || seat.status !== "active") continue;
-        const hand = seat.hands[0];
-        if (hand.result === "blackjack") await Balance.applyDelta(hand.bet + hand.profit, "live_bj_blackjack_win");
-        else if (hand.result === "push") await Balance.applyDelta(hand.bet, "live_bj_push");
-      }
-    }
-    async function payoutSideBets(t) {
-      for (const seat of t.seats) {
-        if (seat.uid !== myUid()) continue;
-        const pp = seat.sideBets.perfectPairs, tw = seat.sideBets.twentyPlusThree;
-        if (pp > 0 && seat.sideBetResults.perfectPairs) {
-          const win = pp * SIDE_BET_PAYTABLES.perfectPairs[seat.sideBetResults.perfectPairs] + pp;
-          await Balance.applyDelta(win, "live_bj_pp_win");
-        }
-        if (tw > 0 && seat.sideBetResults.twentyPlusThree) {
-          const win = tw * SIDE_BET_PAYTABLES.twentyPlusThree[seat.sideBetResults.twentyPlusThree] + tw;
-          await Balance.applyDelta(win, "live_bj_213_win");
-        }
-      }
     }
 
     async function takeInsurance(seatIdx) {
@@ -1066,10 +1176,15 @@
             hand.cards = [c0, shoe.draw()];
             hand.isSplitAces = isAces;
             hand.acted = true;
+            hand.fromSplit = true;
             if (isAces) hand.status = "stood";
-            const newHand2 = { ...emptyHand(), cards: [c1, shoe.draw()], bet: hand.bet, isSplitAces: isAces };
+            const newHand2 = { ...emptyHand(), cards: [c1, shoe.draw()], bet: hand.bet, isSplitAces: isAces, fromSplit: true };
             if (isAces) newHand2.status = "stood";
             seat.hands.splice(hi + 1, 0, newHand2);
+          } else if (action === "surrender") {
+            if (hand.acted || hand.cards.length !== 2 || hand.fromSplit) throw new Error("cannot-surrender");
+            hand.status = "surrender"; hand.result = "surrender"; hand.acted = true;
+            hand.profit = -Math.round(hand.bet * (1 - SURRENDER_RETURN_FRACTION));
           }
           needsAdvance = hand.status !== "active";
           t.phaseDeadline = Date.now() + LIVE_BJ_TURN_MS;
@@ -1122,7 +1237,7 @@
       if (anyLive) {
         while (true) {
           const { total, soft } = bjHandValue(t.dealer);
-          if (total > 21 || total > 17 || (total === 17 && !soft)) break;
+          if (total > 21 || total > 17 || (total === 17 && (!soft || DEALER_STANDS_SOFT_17))) break;
           t.dealer.push(shoe.draw());
           await tref().set(t);
           await delay(LIVE_BJ_DEAL_CARD_MS);
@@ -1133,14 +1248,13 @@
       for (const seat of t.seats) {
         if (seat.status !== "active") continue;
         for (const hand of seat.hands) {
-          if (hand.result === "blackjack" || hand.result === "push") { hand.status = "push"; continue; }
+          if (hand.result === "blackjack" || hand.result === "push" || hand.result === "surrender") { hand.status = "push"; continue; }
           const val = bjHandValue(hand.cards).total;
           let payout = 0;
           if (hand.status === "bust") hand.result = "lose";
           else if (dealerBust || val > dealerVal) { hand.result = "win"; payout = hand.bet * 2; }
           else if (val === dealerVal) { hand.result = "push"; payout = hand.bet; }
           else hand.result = "lose";
-          if (payout > 0 && seat.uid === myUid()) await Balance.applyDelta(payout, "live_bj_win");
           hand.profit = payout - hand.bet;
         }
         const mainResult = seat.hands[0].result;
@@ -1151,16 +1265,80 @@
           else if (mainResult === "blackjack") bbPayout = Math.round(bb.amount * 2.5);
           else if (mainResult === "push") bbPayout = bb.amount;
           bb.profit = bbPayout - bb.amount;
-          if (bbPayout > 0 && bb.uid === myUid()) await Balance.applyDelta(bbPayout, mainResult === "blackjack" ? "live_bj_behind_win" : mainResult === "push" ? "live_bj_behind_push" : "live_bj_behind_win");
-        }
-        if (seat.insuranceBet > 0) {
-          const dealerBJ = isBlackjack(t.dealer);
-          if (dealerBJ && seat.uid === myUid()) await Balance.applyDelta(seat.insuranceBet * 3, "live_bj_insurance_win");
         }
       }
       t.phase = "settled";
       await tref().set(t);
       setTimeout(resetForNextRound, 4500);
+    }
+
+    // Deal/settlement math above runs on whichever single client's tick()
+    // happens to win the race — but Balance is a local, per-client thing
+    // (each player can only credit their own balance document), so that
+    // one client crediting payouts directly would only ever pay itself.
+    // Instead, every connected client runs this on every table update and
+    // claims only its own unpaid stake: its own hand(s), its own side
+    // bets, its own insurance, and any bets it placed behind other seats.
+    // The `paid`/`sideBetsPaid`/`insurancePaid` flags (claimed inside a
+    // transaction) make each unit payable exactly once no matter how many
+    // clients race to reconcile at the same time.
+    let reconcileBusy = false;
+    async function reconcileMyPayouts(t) {
+      if (reconcileBusy || !t) return;
+      const uid = myUid();
+      if (!uid) return;
+      const sideBetsReady = t.phase !== "betting" && t.phase !== "dealing" && t.phase !== "idle";
+      const insuranceReady = t.phase === "settled";
+      const looksUnpaid = t.seats.some((seat) => {
+        if (seat.uid === uid) {
+          if (seat.hands.some((h) => h.result != null && !h.paid)) return true;
+          if (sideBetsReady && !seat.sideBetsPaid && (seat.sideBets.perfectPairs > 0 || seat.sideBets.twentyPlusThree > 0)) return true;
+          if (insuranceReady && seat.insuranceBet > 0 && !seat.insurancePaid) return true;
+        }
+        return (seat.behindBets || []).some((bb) => bb.uid === uid && bb.result != null && !bb.paid);
+      });
+      if (!looksUnpaid) return;
+
+      reconcileBusy = true;
+      let totalPayout = 0;
+      try {
+        await getDb().runTransaction(async (tx) => {
+          totalPayout = 0;
+          const fresh = (await tx.get(tref())).data();
+          const freshSideBetsReady = fresh.phase !== "betting" && fresh.phase !== "dealing" && fresh.phase !== "idle";
+          const freshInsuranceReady = fresh.phase === "settled";
+          const dealerBJ = freshInsuranceReady && isBlackjack(fresh.dealer);
+          for (const seat of fresh.seats) {
+            if (seat.uid === uid) {
+              for (const h of seat.hands) {
+                if (h.result != null && !h.paid) {
+                  totalPayout += h.bet + (h.profit || 0);
+                  h.paid = true;
+                }
+              }
+              if (freshSideBetsReady && !seat.sideBetsPaid && (seat.sideBets.perfectPairs > 0 || seat.sideBets.twentyPlusThree > 0)) {
+                const pp = seat.sideBets.perfectPairs, tw = seat.sideBets.twentyPlusThree;
+                if (pp > 0 && seat.sideBetResults.perfectPairs) totalPayout += pp * SIDE_BET_PAYTABLES.perfectPairs[seat.sideBetResults.perfectPairs] + pp;
+                if (tw > 0 && seat.sideBetResults.twentyPlusThree) totalPayout += tw * SIDE_BET_PAYTABLES.twentyPlusThree[seat.sideBetResults.twentyPlusThree] + tw;
+                seat.sideBetsPaid = true;
+              }
+              if (freshInsuranceReady && seat.insuranceBet > 0 && !seat.insurancePaid) {
+                if (dealerBJ) totalPayout += seat.insuranceBet * 3;
+                seat.insurancePaid = true;
+              }
+            }
+            for (const bb of seat.behindBets || []) {
+              if (bb.uid === uid && bb.result != null && !bb.paid) {
+                totalPayout += bb.amount + (bb.profit || 0);
+                bb.paid = true;
+              }
+            }
+          }
+          tx.set(tref(), fresh);
+        });
+        if (totalPayout > 0) await Balance.applyDelta(totalPayout, "live_bj_payout");
+      } catch (e) { /* another write raced this one — the next snapshot will retry */ }
+      reconcileBusy = false;
     }
 
     async function resetForNextRound() {
@@ -1298,10 +1476,11 @@
         ${seat.insuranceBet > 0 ? `<div class="muted center" style="font-size:11px">Insured ${fmt(seat.insuranceBet)}</div>` : ""}
         ${mine && seat.status === "waiting" ? `
           <div class="col mt8">
-            <div class="row" style="justify-content:space-between">
+            <div class="row" style="justify-content:space-between;align-items:center">
               <span class="muted">Main bet</span>
-              <span class="muted" style="font-size:11px">Table limits: ${fmt(tier.minBet)}&ndash;${fmt(tier.maxBet)}</span>
+              ${myPendingBet > 0 ? chipStackHtml(myPendingBet, { size: 16 }) : ""}
             </div>
+            <div class="muted" style="font-size:11px;margin-bottom:2px">Table limits: ${fmt(tier.minBet)}&ndash;${fmt(tier.maxBet)}</div>
             ${renderBetControls(`lbj-main-${i}`, myPendingBet, false)}
             <div class="lbj-sidebet-row">
               <input type="text" id="lbj-pp-${i}" placeholder="Pairs (e.g. 100k)" value="${myPendingPP ? fmt(myPendingPP) : ""}">
@@ -1331,6 +1510,7 @@
       const myTurn = tableDoc.phase === "player-turns" && tableDoc.turnSeatIndex === mySeatIndex;
       const canDouble = myTurn && hand && hand.cards.length === 2 && !hand.acted && Balance.current >= hand.bet;
       const canSplit = myTurn && hand && hand.cards.length === 2 && isSplittablePair(hand.cards[0], hand.cards[1]) && seat.hands.length <= LIVE_BJ_MAX_SPLITS;
+      const canSurrender = myTurn && hand && hand.cards.length === 2 && !hand.acted && !hand.fromSplit;
       const secs = secondsLeft();
       const timerHtml = secs !== null ? `<span class="lbj-timer">${secs}s</span>` : "";
       let statusLine;
@@ -1344,6 +1524,7 @@
         <button class="btn" data-act="stand">Stand</button>
         <button class="btn" ${!canDouble ? "disabled" : ""} data-act="double" title="${!canDouble && hand && Balance.current < hand.bet ? "Not enough balance to double" : ""}">Double</button>
         <button class="btn" ${!canSplit ? "disabled" : ""} data-act="split">Split</button>
+        <button class="btn" ${!canSurrender ? "disabled" : ""} data-act="surrender" title="Forfeit the hand, get half your bet back">Surrender</button>
       </div>` : `<div class="center muted">${statusLine}</div>`;
 
       const chatHtml = chatMessages.map((m) => `<div class="muted"><b>${m.name}</b>: ${m.text}</div>`).join("");
@@ -1355,7 +1536,10 @@
             <span class="pill tier-${tier.key}">${tier.label}</span>
             <span class="muted" style="font-size:12px">Limits: ${fmt(tier.minBet)} &ndash; ${fmt(tier.maxBet)}</span>
           </div>
-          <span class="muted">${statusLine}</span>
+          <div class="row" style="gap:10px;align-items:center">
+            <span class="muted">${statusLine}</span>
+            <button class="btn small" id="saltys-bj-rules-btn">📖 House Rules</button>
+          </div>
         </div>
         <div class="lbj-oval-wrap mt8">
           <div class="lbj-oval-table">
@@ -1380,6 +1564,7 @@
       root.querySelectorAll("[data-behind]").forEach((b) => b.addEventListener("click", () => betBehind(parseInt(b.dataset.behind, 10), myPendingBehind)));
       root.querySelectorAll("[data-insure]").forEach((b) => b.addEventListener("click", () => takeInsurance(parseInt(b.dataset.insure, 10))));
       root.querySelectorAll("[data-decline-insure]").forEach((b) => b.addEventListener("click", () => declineInsurance(parseInt(b.dataset.declineInsure, 10))));
+      wireRulesButton(root);
       if (myTurn) root.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => act(b.dataset.act)));
 
       tableDoc.seats.forEach((seatX, i) => {
@@ -1427,7 +1612,11 @@
           root.innerHTML = `<div class="table-surface center muted">Failed to load table: ${e.message || e}</div>`;
           return () => { root = null; };
         }
-        unsubTable = tref().onSnapshot((snap) => { tableDoc = snap.data(); renderInner(); });
+        unsubTable = tref().onSnapshot((snap) => {
+          tableDoc = snap.data();
+          renderInner();
+          reconcileMyPayouts(tableDoc).catch(() => {});
+        });
         unsubChat = chatRef().orderBy("at", "desc").limit(30).onSnapshot((qs) => { chatMessages = qs.docs.map((d) => d.data()).reverse(); renderInner(); });
         tickTimer = setInterval(() => { tick(); updateTimerDisplay(); }, 1000);
         return () => { if (unsubTable) unsubTable(); if (unsubChat) unsubChat(); if (tickTimer) clearInterval(tickTimer); root = null; };

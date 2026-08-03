@@ -681,7 +681,7 @@
           0 14px 40px rgba(0,0,0,.4), 0 0 0 6px #1a0f05, 0 0 0 9px #3d2410;
       }
       #${OVERLAY_ID} .ov-dealer{
-        position:absolute; top:8%; left:50%; transform:translateX(-50%);
+        position:absolute; top:16%; left:50%; transform:translateX(-50%);
         display:flex; flex-direction:column; align-items:center; gap:6px;
       }
       #${OVERLAY_ID} .ov-dealer-hand{ display:flex; gap:6px; }
@@ -712,20 +712,38 @@
       }
       #${OVERLAY_ID} .ov-chipmark.empty{ opacity:.3; }
       #${OVERLAY_ID} .ov-betlabel{ font-size:13px; color:var(--gold-bright); font-weight:700; }
-      #${OVERLAY_ID} .ov-avatar{
-        width:60px; height:60px; border-radius:50%; border:3px solid #111; background:#fff;
-        display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; color:#111;
-      }
-      #${OVERLAY_ID} .ov-avatar.empty{ color:#333; background:#fff; }
-      #${OVERLAY_ID} .ov-avatar.you{ border-color:var(--gold); box-shadow:0 0 0 2px var(--gold-bright); }
-      #${OVERLAY_ID} .ov-avatar.corner{ position:absolute; top:-6px; left:-6px; width:52px; height:52px; }
       #${OVERLAY_ID} .ov-subhand{ display:flex; flex-direction:column; align-items:center; gap:2px; }
       #${OVERLAY_ID} .ov-profit{ font:800 12px/1 "JetBrains Mono",monospace; margin-top:2px; padding:2px 6px; border-radius:6px; background:var(--panel-2); }
       #${OVERLAY_ID} .ov-profit.win{ color:var(--success); }
       #${OVERLAY_ID} .ov-profit.lose{ color:var(--danger); }
-      #${OVERLAY_ID} .ov-total-profit{ text-align:center; font:800 20px/1 "Oswald",sans-serif; margin-top:14px; }
-      #${OVERLAY_ID} .ov-total-profit.win{ color:var(--success); }
-      #${OVERLAY_ID} .ov-total-profit.lose{ color:var(--danger); }
+      #${OVERLAY_ID} .ov-win-badge{
+        font:700 11px/1 "Oswald",sans-serif; text-transform:uppercase; letter-spacing:.5px;
+        padding:2px 8px; border-radius:5px; margin-top:2px; background:var(--panel-2);
+      }
+      #${OVERLAY_ID} .ov-win-badge.win{ color:var(--success); }
+      #${OVERLAY_ID} .ov-win-badge.lose{ color:var(--danger); }
+      #${OVERLAY_ID} .ov-win-badge.push{ color:var(--text-dim); }
+
+      /* --- round summary: one clear result, centered on the table --- */
+      #${OVERLAY_ID} .ov-round-summary{
+        position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); z-index:2;
+        background:rgba(10,14,10,.88); border:2px solid var(--gold); border-radius:16px;
+        padding:16px 28px; text-align:center; box-shadow:0 10px 40px rgba(0,0,0,.6); min-width:220px;
+      }
+      #${OVERLAY_ID} .ov-round-summary-headline{ font:800 26px/1 "Oswald",sans-serif; letter-spacing:1px; margin-bottom:10px; }
+      #${OVERLAY_ID} .ov-round-summary.win .ov-round-summary-headline{ color:var(--success); }
+      #${OVERLAY_ID} .ov-round-summary.lose .ov-round-summary-headline{ color:var(--danger); }
+      #${OVERLAY_ID} .ov-round-summary.push .ov-round-summary-headline{ color:var(--gold-bright); }
+      #${OVERLAY_ID} .ov-round-summary-lines{ display:flex; flex-direction:column; gap:4px; min-width:180px; }
+      #${OVERLAY_ID} .ov-summary-line{ display:flex; justify-content:space-between; gap:20px; font:600 13px/1.4 Inter,sans-serif; color:var(--text-dim); }
+      #${OVERLAY_ID} .ov-summary-line span:last-child{ font-family:"JetBrains Mono",monospace; font-weight:700; color:var(--text); }
+      #${OVERLAY_ID} .ov-summary-line span.win{ color:var(--success) !important; }
+      #${OVERLAY_ID} .ov-summary-line span.lose{ color:var(--danger) !important; }
+      #${OVERLAY_ID} .ov-summary-line.total{
+        margin-top:6px; padding-top:8px; border-top:1px solid rgba(244,207,101,.25);
+        font:800 15px/1.4 "Oswald",sans-serif; color:var(--gold-bright); text-transform:uppercase; letter-spacing:.5px;
+      }
+      #${OVERLAY_ID} .ov-summary-line.total span:last-child{ font-family:"JetBrains Mono",monospace; color:inherit; }
       #${OVERLAY_ID} .ov-insurance-prompt{
         text-align:center; margin-top:16px; padding:12px; background:var(--panel); border:1px solid var(--gold);
         border-radius:12px; max-width:320px; margin-left:auto; margin-right:auto;

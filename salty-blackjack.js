@@ -41,6 +41,7 @@
   const LIVE_BJ_TURN_MS = 25000;
   const LIVE_BJ_KICK_AFTER_MISSES = 2;
   const LIVE_BJ_DEAL_TIMEOUT_MS = 15000;
+  const LIVE_BJ_INSURANCE_MS = 10000;
 
   const SIDE_BET_PAYTABLES = {
     perfectPairs: { mixed: 5, colored: 12, perfect: 25 },
@@ -48,6 +49,7 @@
   };
   const DEALER_STANDS_SOFT_17 = true;
   const SURRENDER_RETURN_FRACTION = 0.5; // late surrender: forfeit half the bet, hand ends immediately
+  const SOLO_MAX_HANDS_PER_SEAT = 4; // original hand + up to 3 splits, same cap as live's LIVE_BJ_MAX_SPLITS
 
   // chipColor() (core.js) is tiered for the CHIP_DENOMS scale (100k-100M),
   // which makes sense for the pickable chip buttons but not for a bet
@@ -95,8 +97,8 @@
     const insurancePayoutRatio = "2 TO 1"; // seat.insuranceBet * 3 returned = stake + 2x profit
     const blackjackPayoutRatio = "3 TO 2"; // hand.bet * 2.5 returned = stake + 1.5x profit
     return `
-      <svg class="ov-banner" viewBox="0 0 640 140" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <path id="ov-banner-arc" d="M 20,125 Q 320,15 620,125" fill="none"/>
+      <svg class="ov-banner" viewBox="0 0 440 60" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path id="ov-banner-arc" d="M 15,52 Q 220,8 425,52" fill="none"/>
         <text class="ov-banner-main"><textPath href="#ov-banner-arc" startOffset="50%" text-anchor="middle">BLACKJACK PAYS ${blackjackPayoutRatio}</textPath></text>
       </svg>
       <div class="ov-banner-sub">Dealer must draw to 16 and stand on all 17s</div>
@@ -229,15 +231,15 @@
       #${OVERLAY_ID} .chip-stack-label{ font:700 11px/1 "JetBrains Mono",monospace; color:var(--gold-bright); text-shadow:0 1px 3px rgba(0,0,0,.8); white-space:nowrap; }
 
       /* --- felt rules banner (the curved "BLACKJACK PAYS 3 TO 2" text) --- */
-      #${OVERLAY_ID} .ov-banner{ position:absolute; top:1%; left:50%; transform:translateX(-50%); width:72%; max-width:560px; pointer-events:none; z-index:0; }
-      #${OVERLAY_ID} .ov-banner-main{ font:800 21px/1 "Oswald",sans-serif; letter-spacing:2.5px; fill:rgba(244,207,101,.5); }
+      #${OVERLAY_ID} .ov-banner{ position:absolute; top:0.5%; left:50%; transform:translateX(-50%); width:46%; max-width:360px; pointer-events:none; z-index:0; }
+      #${OVERLAY_ID} .ov-banner-main{ font:800 18px/1 "Oswald",sans-serif; letter-spacing:1.5px; fill:rgba(244,207,101,.5); }
       #${OVERLAY_ID} .ov-banner-sub, #${OVERLAY_ID} .ov-banner-sub2{
-        position:absolute; left:50%; transform:translateX(-50%); width:80%; text-align:center;
-        font:700 9.5px/1.3 "Oswald",sans-serif; letter-spacing:1px; text-transform:uppercase;
-        color:rgba(244,207,101,.42); pointer-events:none; z-index:0; white-space:nowrap;
+        position:absolute; left:50%; transform:translateX(-50%); width:70%; text-align:center;
+        font:700 8px/1.3 "Oswald",sans-serif; letter-spacing:.6px; text-transform:uppercase;
+        color:rgba(244,207,101,.4); pointer-events:none; z-index:0; white-space:nowrap;
       }
-      #${OVERLAY_ID} .ov-banner-sub{ top:15%; }
-      #${OVERLAY_ID} .ov-banner-sub2{ top:20.5%; }
+      #${OVERLAY_ID} .ov-banner-sub{ top:8.5%; }
+      #${OVERLAY_ID} .ov-banner-sub2{ top:10.8%; }
 
       /* --- corner shoe / discard tray decoration --- */
       #${OVERLAY_ID} .ov-corner-deco{ position:absolute; top:3%; display:flex; align-items:center; z-index:0; opacity:.9; }
@@ -553,27 +555,48 @@
       }
       state.insuranceOffered = state.dealer[0].r === "A";
 
-      // A natural blackjack is locked in immediately — it's never offered
-      // hit/double/split — and pays out right away rather than waiting
-      // until every other hand at the table finishes. Each hand is judged
-      // independently, so playing several seats at once doesn't disable
-      // this for any of them.
+      // If the dealer's up-card is an Ace, real tables offer insurance and
+      // wait for a decision BEFORE checking the hole card — insurance would
+      // be meaningless if the peek already happened first. So only peek
+      // immediately when there's no insurance decision in the way; when
+      // there is, takeInsurance()/declineInsurance() call resolveDealerPeek()
+      // themselves once the player has decided.
+      if (!state.insuranceOffered) await resolveDealerPeek();
+
+      busy = false;
+      render();
+    }
+
+    // The "dealer peek": checks the hole card, resolves any blackjacks
+    // (yours, the dealer's, or both), and pays out insurance if it was
+    // taken. A natural blackjack — yours or the dealer's — is never played
+    // out with hit/stand; it's locked in and settled the moment it's known,
+    // exactly like a real table. If the dealer does have blackjack, every
+    // other hand loses right here too — there's nothing left to play for
+    // once the dealer's already unbeatable.
+    async function resolveDealerPeek() {
       const dealerBJ = isBlackjack(state.dealer);
+      if (state.insuranceBet > 0 && !state.insuranceResolved) {
+        if (dealerBJ) await Balance.applyDelta(state.insuranceBet * 3, "solo_bj_insurance_win");
+        state.insuranceResolved = true;
+      }
       for (const hand of state.hands) {
-        if (!isBlackjack(hand.cards)) continue;
-        hand.acted = true;
+        const handBJ = isBlackjack(hand.cards);
         if (dealerBJ) {
-          hand.status = "push"; hand.result = "push"; hand.profit = 0;
-          await Balance.applyDelta(hand.bet, "solo_bj_instant_push");
-        } else {
+          hand.acted = true;
+          if (handBJ) {
+            hand.status = "push"; hand.result = "push"; hand.profit = 0;
+            await Balance.applyDelta(hand.bet, "solo_bj_instant_push");
+          } else {
+            hand.status = "push"; hand.result = "lose"; hand.profit = -hand.bet;
+          }
+        } else if (handBJ) {
+          hand.acted = true;
           hand.status = "blackjack"; hand.result = "blackjack"; hand.profit = Math.round(hand.bet * 1.5);
           await Balance.applyDelta(hand.bet + hand.profit, "solo_bj_instant_blackjack");
         }
       }
       advanceIfResolved();
-
-      busy = false;
-      render();
     }
 
     function currentHand() { return state.hands[state.activeHandIndex]; }
@@ -584,15 +607,26 @@
 
     async function takeInsurance() {
       if (busy || !state.insuranceOffered) { state.insuranceResolved = true; state.insuranceBet = 0; return; }
-      const hand = state.hands[0];
-      const amount = clamp(Math.round(hand.bet / 2), MIN_BET, MAX_BET);
+      // One insurance decision covers the whole round, so it's sized to
+      // your total exposure across every hand you're playing this round —
+      // not just the first seat's bet — since it's the only chance you get
+      // to insure any of them.
+      const totalBet = state.hands.reduce((s, h) => s + h.bet, 0);
+      const amount = clamp(Math.round(totalBet / 2), MIN_BET, MAX_BET);
       if (amount > Balance.current) { toast("Not enough balance for insurance."); return; }
       busy = true; render();
       await Balance.applyDelta(-amount, "solo_bj_insurance_bet");
       state.insuranceBet = amount;
+      state.insuranceOffered = false;
+      await resolveDealerPeek();
       busy = false; render();
     }
-    function declineInsurance() { state.insuranceOffered = false; render(); }
+    async function declineInsurance() {
+      state.insuranceOffered = false;
+      busy = true; render();
+      await resolveDealerPeek();
+      busy = false; render();
+    }
 
     async function act(action) {
       if (busy || state.phase !== "player") return;
@@ -627,7 +661,6 @@
         newH.fromSplit = true;
         hand.cards = [c0];
         hand.isSplitAces = isAces;
-        hand.acted = true;
         hand.fromSplit = true;
         state.hands.splice(state.activeHandIndex + 1, 0, newH);
         render();
@@ -674,6 +707,8 @@
       const dealerBJ = isBlackjack(state.dealer);
       const dealerBust = dealerVal > 21;
       let totalProfit = 0;
+      let handProfitTotal = 0;
+      let sideBetProfitTotal = 0;
       for (const hand of state.hands) {
         let payout = 0;
         if (hand.result != null) {
@@ -689,28 +724,35 @@
           else { hand.result = "lose"; }
         }
         if (payout > 0) await Balance.applyDelta(payout, "solo_bj_settle_multi");
-        if (hand.profit == null) hand.profit = payout - hand.bet;
+        const mainProfit = hand.profit != null ? hand.profit : payout - hand.bet;
+        if (hand.profit == null) hand.profit = mainProfit;
+        handProfitTotal += mainProfit;
 
+        let sbProfit = 0;
         const pp = hand.sideBets && hand.sideBets.perfectPairs;
         const tw = hand.sideBets && hand.sideBets.twentyPlusThree;
         if (pp > 0) {
           const r = hand.sideBetResults.perfectPairs;
-          if (r) { const win = pp * SIDE_BET_PAYTABLES.perfectPairs[r] + pp; await Balance.applyDelta(win, "solo_bj_pp_win"); hand.profit += win - pp; }
-          else hand.profit -= pp;
+          if (r) { const win = pp * SIDE_BET_PAYTABLES.perfectPairs[r] + pp; await Balance.applyDelta(win, "solo_bj_pp_win"); sbProfit += win - pp; }
+          else sbProfit -= pp;
         }
         if (tw > 0) {
           const r = hand.sideBetResults.twentyPlusThree;
-          if (r) { const win = tw * SIDE_BET_PAYTABLES.twentyPlusThree[r] + tw; await Balance.applyDelta(win, "solo_bj_213_win"); hand.profit += win - tw; }
-          else hand.profit -= tw;
+          if (r) { const win = tw * SIDE_BET_PAYTABLES.twentyPlusThree[r] + tw; await Balance.applyDelta(win, "solo_bj_213_win"); sbProfit += win - tw; }
+          else sbProfit -= tw;
         }
-        totalProfit += hand.profit;
+        hand.profit += sbProfit;
+        sideBetProfitTotal += sbProfit;
+        totalProfit += mainProfit + sbProfit;
       }
+      let insuranceProfit = 0;
       if (state.insuranceBet > 0 && !state.insuranceResolved) {
-        if (dealerBJ) { await Balance.applyDelta(state.insuranceBet * 3, "solo_bj_insurance_win"); totalProfit += state.insuranceBet * 2; }
-        else totalProfit -= state.insuranceBet;
+        if (dealerBJ) { await Balance.applyDelta(state.insuranceBet * 3, "solo_bj_insurance_win"); insuranceProfit = state.insuranceBet * 2; }
+        else insuranceProfit = -state.insuranceBet;
         state.insuranceResolved = true;
+        totalProfit += insuranceProfit;
       }
-      state.lastResults = { totalProfit };
+      state.lastResults = { totalProfit, handProfitTotal, sideBetProfitTotal, insuranceProfit };
       render();
     }
 
@@ -730,7 +772,6 @@
           return `<div class="ov-seat" style="left:${pos.left}%;top:${pos.top}%">
             <div class="ov-cardslot empty" style="transform:rotate(${pos.rotate})"></div>
             <div class="ov-chipmark empty"></div>
-            <div class="ov-avatar empty">?</div>
           </div>`;
         }
         const subHandsHtml = seatHandIdxs.map((hi) => {
@@ -753,7 +794,7 @@
           const resultOverlay = hand.status === "bust" ? `<div class="ov-result-overlay">${v.total} – Bust</div>`
             : hand.result === "blackjack" ? `<div class="ov-result-overlay">Blackjack!</div>` : "";
           const winBadge = hand.result ? `<div class="ov-win-badge ${hand.profit > 0 ? "win" : hand.profit < 0 ? "lose" : "push"}">
-              ${hand.profit > 0 ? "You win " + fmt(hand.profit) : hand.profit < 0 ? "You lose " + fmt(Math.abs(hand.profit)) : "Push"}
+              ${hand.profit > 0 ? "Win" : hand.profit < 0 ? "Lose" : "Push"}
             </div>` : "";
           return `<div class="ov-subhand ${active ? "active" : ""}" style="opacity:${state.phase === "player" && !active ? 0.6 : 1}">
             <div class="ov-hand-ring"><div class="ov-hand">${hand.cards.map((c) => cardEl(c, false)).join("")}</div>${resultOverlay}</div>
@@ -764,7 +805,6 @@
         }).join("");
         return `<div class="ov-seat" style="left:${pos.left}%;top:${pos.top}%">
           <div class="row" style="gap:6px">${subHandsHtml}</div>
-          <div class="ov-avatar you">You</div>
         </div>`;
       }).join("");
 
@@ -772,15 +812,32 @@
         <div class="ov-insurance-prompt">
           <div class="muted">Dealer shows an Ace — insurance?</div>
           <div class="row" style="justify-content:center;gap:8px;margin-top:6px">
-            <button class="btn small gold" id="sbj-insurance-yes">Insure ${fmt(Math.round((state.hands[0]?.bet || 0) / 2))}</button>
+            <button class="btn small gold" id="sbj-insurance-yes">Insure ${fmt(clamp(Math.round(state.hands.reduce((s, h) => s + h.bet, 0) / 2), MIN_BET, MAX_BET))}</button>
             <button class="btn small" id="sbj-insurance-no">No thanks</button>
           </div>
         </div>` : "";
       const insuredBadge = state.insuranceBet > 0 ? `<div class="muted center" style="margin-top:6px">Insured for ${fmt(state.insuranceBet)}</div>` : "";
-      const totalProfitHtml = state.phase === "settled" && state.lastResults ? `
-        <div class="ov-total-profit ${state.lastResults.totalProfit > 0 ? "win" : state.lastResults.totalProfit < 0 ? "lose" : ""}">
-          ${state.lastResults.totalProfit >= 0 ? "+" : ""}${fmt(state.lastResults.totalProfit)} this hand
-        </div>` : "";
+
+      // One clear, prominent result — centered on the felt instead of a
+      // small line tucked below the table — with a real breakdown instead
+      // of a single lumped number, since hand and side-bet results are
+      // often opposite signs and a single total can hide what actually
+      // happened.
+      const roundSummaryHtml = state.phase === "settled" && state.lastResults ? (() => {
+        const r = state.lastResults;
+        const cls = r.totalProfit > 0 ? "win" : r.totalProfit < 0 ? "lose" : "push";
+        const headline = r.totalProfit > 0 ? "You Win" : r.totalProfit < 0 ? "You Lose" : "Push";
+        const line = (label, amt) => `<div class="ov-summary-line"><span>${label}</span><span class="${amt > 0 ? "win" : amt < 0 ? "lose" : ""}">${amt >= 0 ? "+" : ""}${fmt(amt)}</span></div>`;
+        return `<div class="ov-round-summary ${cls}">
+          <div class="ov-round-summary-headline">${headline}</div>
+          <div class="ov-round-summary-lines">
+            ${line("Hands", r.handProfitTotal)}
+            ${r.sideBetProfitTotal !== 0 ? line("Side Bets", r.sideBetProfitTotal) : ""}
+            ${r.insuranceProfit ? line("Insurance", r.insuranceProfit) : ""}
+            <div class="ov-summary-line total"><span>Total</span><span>${r.totalProfit >= 0 ? "+" : ""}${fmt(r.totalProfit)}</span></div>
+          </div>
+        </div>`;
+      })() : "";
 
       return `<div class="ov-wrap"><div class="ov-table">
           ${tableBannerHtml()}
@@ -792,7 +849,8 @@
           </div>
           ${state.phase === "player" ? `<div class="ov-hint">Playing hand ${state.activeHandIndex + 1} of ${state.hands.length}</div>` : ""}
           ${seatHtml}
-        </div>${insuranceHtml}${insuredBadge}${totalProfitHtml}</div>`;
+          ${roundSummaryHtml}
+        </div>${insuranceHtml}${insuredBadge}</div>`;
     }
 
     function render() {
@@ -804,7 +862,6 @@
           return `<div class="ov-seat" data-seat="${i}" style="left:${pos.left}%;top:${pos.top}%;cursor:pointer">
             <div class="ov-cardslot ${picked ? "" : "empty"}" style="transform:rotate(${pos.rotate});${picked ? "border-color:var(--gold)" : ""}"></div>
             <div style="min-height:34px;display:flex;align-items:flex-end;justify-content:center">${picked ? chipStackHtml(state.betPerHand, { size: 18 }) : ""}</div>
-            <div class="ov-avatar ${picked ? "you" : "empty"}">${picked ? "You" : "?"}</div>
           </div>`;
         }).join("");
         root.innerHTML = rulesButtonRowHtml() + `<div class="ov-wrap"><div class="ov-table">
@@ -854,8 +911,9 @@
       let controls;
       if (state.phase === "player") {
         const hand = currentHand();
-        const canDouble = hand && hand.cards.length === 2 && !hand.acted && Balance.current >= hand.bet;
-        const canSplit = hand && hand.cards.length === 2 && !hand.acted && isSplittablePair(hand.cards[0], hand.cards[1]) && Balance.current >= hand.bet;
+        const canDouble = hand && hand.cards.length === 2 && Balance.current >= hand.bet;
+        const canSplit = hand && hand.cards.length === 2 && isSplittablePair(hand.cards[0], hand.cards[1]) && Balance.current >= hand.bet &&
+          state.hands.filter((h) => h.seatIdx === hand.seatIdx).length < SOLO_MAX_HANDS_PER_SEAT;
         const canSurrender = hand && hand.cards.length === 2 && !hand.acted && !hand.fromSplit;
         controls = `<div class="row center">
           <button class="btn primary" id="sbj-hit" ${busy ? "disabled" : ""}>Hit</button>
@@ -865,7 +923,10 @@
           <button class="btn" id="sbj-surrender" ${busy || !canSurrender ? "disabled" : ""} title="Forfeit the hand, get half your bet back">Surrender</button>
         </div>`;
       } else if (state.phase === "settled") {
-        controls = `<div class="center"><button class="btn primary" id="sbj-again">Play Again</button></div>`;
+        controls = `<div class="row center">
+          <button class="btn primary" id="sbj-rebet">Rebet ${fmt(state.betPerHand)}${state.sidePPPerHand || state.side21PerHand ? " + sides" : ""}</button>
+          <button class="btn" id="sbj-again">Change Bet</button>
+        </div>`;
       } else {
         controls = `<div class="center muted">Dealer playing…</div>`;
       }
@@ -883,11 +944,22 @@
         if (insNo) insNo.addEventListener("click", declineInsurance);
       } else if (state.phase === "settled") {
         root.querySelector("#sbj-again").addEventListener("click", () => {
-          const seats = state.selectedSeats, b = state.betPerHand;
+          const seats = state.selectedSeats, b = state.betPerHand, pp = state.sidePPPerHand, t21 = state.side21PerHand;
           state = freshState();
           state.selectedSeats = seats;
           state.betPerHand = b;
+          state.sidePPPerHand = pp;
+          state.side21PerHand = t21;
           render();
+        });
+        root.querySelector("#sbj-rebet").addEventListener("click", () => {
+          const seats = state.selectedSeats, b = state.betPerHand, pp = state.sidePPPerHand, t21 = state.side21PerHand;
+          state = freshState();
+          state.selectedSeats = seats;
+          state.betPerHand = b;
+          state.sidePPPerHand = pp;
+          state.side21PerHand = t21;
+          startDeal();
         });
       }
     }
@@ -1052,6 +1124,27 @@
         } catch (e) { /* another client already resumed or finished it */ }
         return;
       }
+      if (t.phase === "insurance") {
+        const expired = t.phaseDeadline && now >= t.phaseDeadline;
+        const allDecided = t.seats.every((s) => s.status !== "active" || s.insuranceBet > 0 || s.insuranceDeclined);
+        if (!expired && !allDecided) return;
+        try {
+          let shouldResolve = false;
+          let committedT = null;
+          await getDb().runTransaction(async (tx) => {
+            const t2 = (await tx.get(tref())).data();
+            if (t2.phase !== "insurance") throw new Error("already-progressed");
+            for (const seat of t2.seats) {
+              if (seat.status === "active" && seat.insuranceBet === 0 && !seat.insuranceDeclined) seat.insuranceDeclined = true;
+            }
+            tx.set(tref(), t2);
+            shouldResolve = true;
+            committedT = t2;
+          });
+          if (shouldResolve && committedT) await resolveDealerPeekLive(committedT);
+        } catch (e) { /* another client already resolved this round's insurance */ }
+        return;
+      }
       if (t.phase === "player-turns") {
         const expired = t.phaseDeadline && now >= t.phaseDeadline;
         if (!expired) return;
@@ -1082,18 +1175,47 @@
       await tref().set(t);
       await delay(LIVE_BJ_DEAL_CARD_MS);
 
-      const dealerBJ = isBlackjack(t.dealer);
       for (const seat of t.seats) {
         if (seat.status !== "active") continue;
         const cards = seat.hands[0].cards;
         if (seat.sideBets.perfectPairs > 0) seat.sideBetResults.perfectPairs = evalPerfectPairs(cards);
         if (seat.sideBets.twentyPlusThree > 0) seat.sideBetResults.twentyPlusThree = evalTwentyPlusThree(cards, t.dealer[0]);
-        if (isBlackjack(cards) && !dealerBJ) {
-          const hand = seat.hands[0];
+      }
+
+      // Real tables offer insurance and wait for every player to decide
+      // BEFORE the dealer checks their hole card — peeking first would make
+      // the decision meaningless. So when the up-card is an Ace, pause here
+      // in a dedicated "insurance" phase instead of resolving immediately;
+      // tick() (or takeInsurance/declineInsurance, once everyone's decided)
+      // carries the peek out from there.
+      if (t.dealer[0].r === "A") {
+        t.phase = "insurance";
+        t.phaseDeadline = Date.now() + LIVE_BJ_INSURANCE_MS;
+        await tref().set(t);
+        return;
+      }
+
+      await resolveDealerPeekLive(t);
+    }
+
+    // The "dealer peek": checks the hole card, resolves any blackjacks
+    // (a player's, the dealer's, or both), and — since insurance decisions
+    // are already settled by the time this runs — leaves insurance payout
+    // to reconcileMyPayouts once the round reaches "settled". If the
+    // dealer does have blackjack, every hand is done right here; nobody
+    // plays a hand out against a dealer that already can't lose.
+    async function resolveDealerPeekLive(t) {
+      const dealerBJ = isBlackjack(t.dealer);
+      for (const seat of t.seats) {
+        if (seat.status !== "active") continue;
+        const hand = seat.hands[0];
+        const handBJ = isBlackjack(hand.cards);
+        if (dealerBJ) {
+          hand.acted = true;
+          if (handBJ) { hand.status = "push"; hand.result = "push"; hand.profit = 0; }
+          else { hand.status = "push"; hand.result = "lose"; hand.profit = -hand.bet; }
+        } else if (handBJ) {
           hand.status = "blackjack"; hand.result = "blackjack"; hand.acted = true; hand.profit = Math.round(hand.bet * 1.5);
-        } else if (isBlackjack(cards) && dealerBJ) {
-          const hand = seat.hands[0];
-          hand.status = "push"; hand.result = "push"; hand.acted = true; hand.profit = 0;
         }
       }
       t.phase = "player-turns";
@@ -1110,16 +1232,22 @@
       busy = true;
       try {
         let amount = 0;
+        let allDecided = false;
+        let committedT = null;
         await getDb().runTransaction(async (tx) => {
           const t = (await tx.get(tref())).data();
+          if (t.phase !== "insurance") throw new Error("insurance-closed");
           const seat = t.seats[seatIdx];
           if (!seat || seat.uid !== myUid() || seat.insuranceBet > 0) throw new Error("cannot-insure");
           amount = clamp(Math.round((seat.hands[0]?.bet || 0) / 2), MIN_BET, MAX_BET);
           if (Balance.current < amount) throw new Error("insufficient-balance");
           seat.insuranceBet = amount;
+          allDecided = t.seats.every((s) => s.status !== "active" || s.insuranceBet > 0 || s.insuranceDeclined);
           tx.set(tref(), t);
+          committedT = t;
         });
         if (amount > 0) await Balance.applyDelta(-amount, "live_bj_insurance_bet");
+        if (allDecided && committedT) await resolveDealerPeekLive(committedT);
       } catch (e) { toast("Insurance failed: " + e.message); }
       busy = false;
     }
@@ -1127,13 +1255,19 @@
       if (busy) return;
       busy = true;
       try {
+        let allDecided = false;
+        let committedT = null;
         await getDb().runTransaction(async (tx) => {
           const t = (await tx.get(tref())).data();
+          if (t.phase !== "insurance") throw new Error("insurance-closed");
           const seat = t.seats[seatIdx];
           if (!seat || seat.uid !== myUid()) throw new Error("not-your-seat");
           seat.insuranceDeclined = true;
+          allDecided = t.seats.every((s) => s.status !== "active" || s.insuranceBet > 0 || s.insuranceDeclined);
           tx.set(tref(), t);
+          committedT = t;
         });
+        if (allDecided && committedT) await resolveDealerPeekLive(committedT);
       } catch (e) { /* ignore */ }
       busy = false;
     }
@@ -1167,7 +1301,7 @@
             hand.status = bjHandValue(hand.cards).total > 21 ? "bust" : "stood";
             hand.acted = true;
           } else if (action === "split") {
-            if (seat.hands.length >= LIVE_BJ_MAX_SPLITS) throw new Error("max-splits");
+            if (seat.hands.length > LIVE_BJ_MAX_SPLITS) throw new Error("max-splits");
             const c0 = hand.cards[0], c1 = hand.cards[1];
             if (!isSplittablePair(c0, c1)) throw new Error("not-pair");
             if (Balance.current < hand.bet) throw new Error("insufficient-balance");
@@ -1175,7 +1309,6 @@
             const isAces = c0.r === "A";
             hand.cards = [c0, shoe.draw()];
             hand.isSplitAces = isAces;
-            hand.acted = true;
             hand.fromSplit = true;
             if (isAces) hand.status = "stood";
             const newHand2 = { ...emptyHand(), cards: [c1, shoe.draw()], bet: hand.bet, isSplitAces: isAces, fromSplit: true };
@@ -1382,7 +1515,7 @@
             inset 0 0 0 13px rgba(74,47,20,.45), inset 0 0 0 15px rgba(0,0,0,.3),
             0 10px 30px rgba(0,0,0,.35), 0 0 0 4px #1a0f05, 0 0 0 6px #3d2410;
         }
-        #${OVERLAY_ID} .lbj-oval-dealer{ position:absolute; top:8%; left:50%; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; gap:4px; z-index:1; }
+        #${OVERLAY_ID} .lbj-oval-dealer{ position:absolute; top:16%; left:50%; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; gap:4px; z-index:1; }
         #${OVERLAY_ID} .lbj-oval-seats{ position:relative; margin-top:-40px; display:grid; grid-template-columns:repeat(5,1fr); gap:16px; padding:0 14px; }
         #${OVERLAY_ID} .lbj-seat{
           background:linear-gradient(180deg, rgba(28,34,44,.92), rgba(15,18,24,.92));
@@ -1465,7 +1598,7 @@
       const canBetBehind = !mine && seat.status !== "empty" && tableDoc.phase === "betting" && !seat.behindBets.some((b) => b.uid === myUid());
       const betTooHigh = (myPendingBet + myPendingPP + myPending213) > Balance.current;
       const dealerShowsAce = tableDoc.dealer && tableDoc.dealer[0] && tableDoc.dealer[0].r === "A";
-      const canInsure = mine && dealerShowsAce && tableDoc.phase === "player-turns" && (seat.insuranceBet || 0) === 0 && !seat.insuranceDeclined;
+      const canInsure = mine && dealerShowsAce && tableDoc.phase === "insurance" && (seat.insuranceBet || 0) === 0 && !seat.insuranceDeclined;
       const tier = tierForTable(tableId);
       return `<div class="lbj-seat col ${stateClass}" data-drop-seat="${i}">
         <div class="row" style="justify-content:space-between"><span class="muted">Seat ${i + 1} · ${seat.name || ""}</span>${mine ? '<span class="pill">You</span>' : ""}${missedWarningBadge(seat)}</div>
@@ -1508,7 +1641,7 @@
       const seat = tableDoc.seats[mySeatIndex];
       const hand = seat && seat.hands && seat.hands[tableDoc.turnHandIndex];
       const myTurn = tableDoc.phase === "player-turns" && tableDoc.turnSeatIndex === mySeatIndex;
-      const canDouble = myTurn && hand && hand.cards.length === 2 && !hand.acted && Balance.current >= hand.bet;
+      const canDouble = myTurn && hand && hand.cards.length === 2 && Balance.current >= hand.bet;
       const canSplit = myTurn && hand && hand.cards.length === 2 && isSplittablePair(hand.cards[0], hand.cards[1]) && seat.hands.length <= LIVE_BJ_MAX_SPLITS;
       const canSurrender = myTurn && hand && hand.cards.length === 2 && !hand.acted && !hand.fromSplit;
       const secs = secondsLeft();
@@ -1516,6 +1649,7 @@
       let statusLine;
       if (tableDoc.phase === "idle") statusLine = "Table idle — sit down to start a round";
       else if (tableDoc.phase === "betting") statusLine = `Betting closes in ${timerHtml}`;
+      else if (tableDoc.phase === "insurance") statusLine = `Dealer shows an Ace — insurance? ${timerHtml}`;
       else if (tableDoc.phase === "player-turns") statusLine = myTurn ? `Your move — ${timerHtml}` : `Waiting on seat ${tableDoc.turnSeatIndex + 1} — ${timerHtml}`;
       else statusLine = tableDoc.phase;
 

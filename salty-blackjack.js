@@ -51,34 +51,21 @@
   const SURRENDER_RETURN_FRACTION = 0.5; // late surrender: forfeit half the bet, hand ends immediately
   const SOLO_MAX_HANDS_PER_SEAT = 4; // original hand + up to 3 splits, same cap as live's LIVE_BJ_MAX_SPLITS
 
-  // chipColor() (core.js) is tiered for the CHIP_DENOMS scale (100k-100M),
-  // which makes sense for the pickable chip buttons but not for a bet
-  // stack: with a 10,000 starting balance, nearly every real bet falls in
-  // chipColor's lowest bucket and renders as the same green every time.
-  // This scale is tuned to how big a bet actually looks relative to a
-  // normal balance instead.
-  function chipStackColor(amount) {
-    if (amount >= 10_000) return "#7c3aed"; // purple — a full starting balance or more
-    if (amount >= 2_500) return "#1a1a1a"; // black
-    if (amount >= 1_000) return "#c0392b"; // red
-    if (amount >= 250) return "#1d6fd6"; // blue
-    if (amount >= 50) return "#2fbf71"; // green
-    return "#e8e4d8"; // white/cream — small change
-  }
-
   // A small fan of casino chips representing a locked-in bet, sized by
-  // magnitude (more chips for a bigger bet) and colored via
-  // chipStackColor() above. Fanned horizontally rather than stacked
-  // vertically — a vertical stack built from negative top-margins can
-  // creep upward with no fixed ceiling and end up overlapping whatever
-  // sits above it (the cards); a horizontal fan only ever grows sideways
-  // in its own row, so it can't intrude on the hand above it. Shared by
-  // solo and live so a bet looks the same whichever mode you're in.
+  // magnitude (more chips for a bigger bet) and colored via chipColor()
+  // (core.js) — the same scale the pickable chip tray uses, so a chip is
+  // the same color in your tray and sitting on the felt. Fanned
+  // horizontally rather than stacked vertically — a vertical stack built
+  // from negative top-margins can creep upward with no fixed ceiling and
+  // end up overlapping whatever sits above it (the cards); a horizontal
+  // fan only ever grows sideways in its own row, so it can't intrude on
+  // the hand above it. Shared by solo and live so a bet looks the same
+  // whichever mode you're in.
   function chipStackHtml(amount, opts = {}) {
     if (!amount || amount <= 0) return "";
     const size = opts.size || 24;
     const n = Math.min(4, Math.max(1, Math.round(Math.log10(Math.max(amount, 1)) - 0.5)));
-    const color = chipStackColor(amount);
+    const color = chipColor(amount);
     const discs = Array.from({ length: n }, (_, i) => `
       <div class="chip-stack-disc" style="width:${size}px;height:${size}px;${i > 0 ? `margin-left:-${Math.round(size * 0.55)}px;` : ""}
         background:

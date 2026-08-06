@@ -71,18 +71,23 @@
     return Math.round(suffix ? num * mult[suffix] : num);
   }
 
-  // Chip denominations available at the tables: 100k through 100m.
-  const CHIP_DENOMS = [100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000, 100_000_000];
+  // Scaled to the actual economy (STARTING_BALANCE 10,000, MIN_BET 10) —
+  // real chip-color conventions, rescaled: white, red, blue, green, black,
+  // purple, gold.
+  const CHIP_DENOMS = [10, 25, 100, 500, 1_000, 5_000, 25_000];
   function chipLabel(v) {
     if (v >= 1_000_000) return `${v / 1_000_000}M`;
     if (v >= 1_000) return `${v / 1_000}K`;
     return `${v}`;
   }
   function chipColor(v) {
-    if (v >= 100_000_000) return "#7c3aed";
-    if (v >= 10_000_000) return "#c0392b";
-    if (v >= 1_000_000) return "#d4af37";
-    return "#2fbf71";
+    if (v >= 25_000) return "#d4af37"; // gold
+    if (v >= 5_000) return "#7c3aed"; // purple
+    if (v >= 1_000) return "#1a1a1a"; // black
+    if (v >= 500) return "#2fbf71"; // green
+    if (v >= 100) return "#1d6fd6"; // blue
+    if (v >= 25) return "#c0392b"; // red
+    return "#e8e4d8"; // white/cream
   }
   // Builds an inline style for a realistic casino chip: a solid base color,
   // a dashed edge-spot ring (the little stripes real chips have), and a
@@ -102,12 +107,18 @@
   // buttons. `idPrefix` namespaces the element ids so multiple instances
   // (solo vs live) don't collide.
   function renderBetControls(idPrefix, currentBet, disabled) {
+    const pileN = currentBet > 0 ? Math.min(4, Math.max(1, Math.round(Math.log10(Math.max(currentBet, 1)) - 0.5))) : 0;
+    const pileHtml = Array.from({ length: pileN }, (_, i) => `
+      <div class="bet-spot-chip" style="${i > 0 ? "margin-left:-16px;" : ""}${chipStyle(currentBet)}"></div>
+    `).join("");
     return `
       <div class="col" style="gap:10px">
         <div class="row" style="align-items:center;gap:12px">
-          <div class="bet-spot" id="${idPrefix}-bet-spot" title="Drag chips here">
+          <div class="bet-spot" id="${idPrefix}-bet-spot" title="Click or drag chips here">
             <div class="bet-spot-ring"></div>
-            <span class="bet-spot-amt">${fmt(currentBet)}</span>
+            ${currentBet > 0
+              ? `<div class="bet-spot-pile">${pileHtml}</div><span class="bet-spot-amt">${fmt(currentBet)}</span>`
+              : `<span class="bet-spot-amt empty">Place<br>Bet</span>`}
           </div>
           <div class="col grow" style="gap:6px">
             <div class="row">
@@ -607,14 +618,20 @@
       }
       /* --- bet spot: the felt circle chips get dragged onto --- */
       #${OVERLAY_ID} .bet-spot{
-        position:relative; width:64px; height:64px; border-radius:50%; flex:none; cursor:default;
+        position:relative; width:88px; height:88px; border-radius:50%; flex:none; cursor:default;
         background:radial-gradient(circle at 50% 40%, #10261c, #0b1a13 75%);
-        border:2px dashed var(--gold); display:flex; align-items:center; justify-content:center;
+        border:2px dashed var(--gold); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
         transition:box-shadow .15s ease, border-color .15s ease;
       }
       #${OVERLAY_ID} .bet-spot.drag-over{ box-shadow:0 0 0 4px rgba(212,175,55,.35); border-color:var(--gold-bright); }
       #${OVERLAY_ID} .bet-spot-ring{ position:absolute; inset:6px; border-radius:50%; border:1px solid rgba(212,175,55,.3); pointer-events:none; }
+      #${OVERLAY_ID} .bet-spot-pile{ display:flex; align-items:center; pointer-events:none; }
+      #${OVERLAY_ID} .bet-spot-chip{
+        width:32px; height:32px; border-radius:50%; border:2px solid #1a1400; flex-shrink:0;
+        box-shadow:0 2px 5px rgba(0,0,0,.5), inset 0 0 0 2px rgba(255,255,255,.12);
+      }
       #${OVERLAY_ID} .bet-spot-amt{ font:700 11px/1.2 "JetBrains Mono",monospace; color:var(--gold-bright); text-align:center; padding:0 4px; word-break:break-word; pointer-events:none; }
+      #${OVERLAY_ID} .bet-spot-amt.empty{ font:600 9.5px/1.3 Inter,sans-serif; color:var(--text-dim); text-transform:uppercase; letter-spacing:.4px; }
       #${OVERLAY_ID} .betgrid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:8px; }
       #${OVERLAY_ID} .betcell{
         background:var(--panel-2); border:1px solid var(--border); border-radius:10px; padding:12px 6px;

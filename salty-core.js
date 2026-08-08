@@ -71,16 +71,34 @@
     return Math.round(suffix ? num * mult[suffix] : num);
   }
 
-  // Scaled to the actual economy (STARTING_BALANCE 10,000, MIN_BET 10) —
-  // real chip-color conventions, rescaled: white, red, blue, green, black,
-  // purple, gold.
-  const CHIP_DENOMS = [10, 25, 100, 500, 1_000, 5_000, 25_000];
+  // Scaled to the actual economy (STARTING_BALANCE 10,000, MIN_BET 10,
+  // MAX_BET 1,000,000,000) — the low end (10 through 25,000) keeps real
+  // chip-color conventions (white, red, blue, green, black, purple, gold);
+  // above that, solid colors continue for the mid tiers, and from 25M up
+  // every chip switches to a black base with colored stripes instead of a
+  // solid color, so the high-roller tier reads as visually distinct at a
+  // glance rather than "the same chip but bigger". The 1B chip is black
+  // and gold specifically.
+  const CHIP_DENOMS = [
+    10, 25, 100, 500, 1_000, 5_000, 25_000,
+    100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000, 10_000_000,
+    25_000_000, 100_000_000, 250_000_000, 500_000_000, 1_000_000_000,
+  ];
   function chipLabel(v) {
+    if (v >= 1_000_000_000) return `${v / 1_000_000_000}B`;
     if (v >= 1_000_000) return `${v / 1_000_000}M`;
     if (v >= 1_000) return `${v / 1_000}K`;
     return `${v}`;
   }
   function chipColor(v) {
+    if (v >= 25_000_000) return "#0d0d0d"; // black base — the striped tier, see chipStripeColor()
+    if (v >= 10_000_000) return "#6b4423"; // brown
+    if (v >= 5_000_000) return "#9aa4b2"; // silver
+    if (v >= 2_500_000) return "#1a3a8f"; // navy
+    if (v >= 1_000_000) return "#8b1a2b"; // maroon
+    if (v >= 500_000) return "#1ca7a0"; // teal
+    if (v >= 250_000) return "#e0439e"; // pink
+    if (v >= 100_000) return "#e0722f"; // orange
     if (v >= 25_000) return "#d4af37"; // gold
     if (v >= 5_000) return "#7c3aed"; // purple
     if (v >= 1_000) return "#1a1a1a"; // black
@@ -89,11 +107,31 @@
     if (v >= 25) return "#c0392b"; // red
     return "#e8e4d8"; // white/cream
   }
+  // The stripe accent for the black-base tier (25M+) — null below that,
+  // meaning "use the normal solid-color chip style" in chipStyle().
+  function chipStripeColor(v) {
+    if (v >= 1_000_000_000) return "#d4af37"; // gold — the 1B chip
+    if (v >= 500_000_000) return "#7c3aed"; // purple
+    if (v >= 250_000_000) return "#2fbf71"; // green
+    if (v >= 100_000_000) return "#1d6fd6"; // blue
+    if (v >= 25_000_000) return "#c0392b"; // red
+    return null;
+  }
   // Builds an inline style for a realistic casino chip: a solid base color,
   // a dashed edge-spot ring (the little stripes real chips have), and a
   // radial highlight so it looks embossed/glossy instead of a flat circle.
   function chipStyle(v) {
     const c = chipColor(v);
+    const stripe = chipStripeColor(v);
+    if (stripe) {
+      return `
+        background:
+          radial-gradient(circle at 32% 28%, rgba(255,255,255,.35), rgba(255,255,255,0) 42%),
+          repeating-conic-gradient(from 0deg, ${stripe} 0deg 14deg, ${c} 14deg 26deg, ${stripe} 26deg 40deg),
+          ${c};
+        border-color:${stripe};
+      `;
+    }
     return `
       background:
         radial-gradient(circle at 32% 28%, rgba(255,255,255,.55), rgba(255,255,255,0) 42%),
@@ -193,6 +231,14 @@
     if (maxBtn) maxBtn.addEventListener("click", () => setBet(clamp(Math.floor(Balance.current), MIN_BET, MAX_BET)));
     const clearBtn = root.querySelector(`#${idPrefix}-bet-clear`);
     if (clearBtn) clearBtn.addEventListener("click", () => setBet(0));
+    const chipSelect = root.querySelector(".chip-select");
+    if (chipSelect) {
+      chipSelect.addEventListener("wheel", (e) => {
+        if (chipSelect.scrollWidth <= chipSelect.clientWidth) return; // nothing to scroll
+        e.preventDefault();
+        chipSelect.scrollLeft += e.deltaY;
+      }, { passive: false });
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -601,7 +647,13 @@
       #${OVERLAY_ID} .card .br{ align-self:flex-end; transform:rotate(180deg); }
 
       /* --- chips / bet grid --- */
-      #${OVERLAY_ID} .chip-select{ display:flex; gap:10px; flex-wrap:wrap; }
+      #${OVERLAY_ID} .chip-select{
+        display:flex; gap:10px; flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden;
+        scroll-snap-type:x proximity; padding:4px 2px 10px; scrollbar-width:thin;
+      }
+      #${OVERLAY_ID} .chip-select::-webkit-scrollbar{ height:6px; }
+      #${OVERLAY_ID} .chip-select::-webkit-scrollbar-thumb{ background:var(--border); border-radius:3px; }
+      #${OVERLAY_ID} .chip-select .chip-btn{ scroll-snap-align:center; flex-shrink:0; }
       #${OVERLAY_ID} .chip-btn{
         width:54px; height:54px; border-radius:50%; border:3px solid #1a1400; cursor:grab;
         display:flex; align-items:center; justify-content:center; text-align:center;

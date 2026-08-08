@@ -16,7 +16,7 @@
   const {
     MIN_BET, MAX_BET, GAME_MODULES, OVERLAY_ID, LS_HANDLE,
     Balance, Shoe, bjHandValue, isBlackjack, isSplittablePair, cardColor, RANK_ORDER, SUIT_GLYPH,
-    clamp, delay, fmt, parseAmount, chipColor, chipStyle, CHIP_DENOMS, renderBetControls, wireBetControls, toast,
+    clamp, delay, fmt, parseAmount, chipColor, chipStyle, chipLabel, CHIP_DENOMS, renderBetControls, wireBetControls, toast,
     getDb, getAuthReady, getUid, isFirebaseConfigured,
   } = window.SaltyCore;
 
@@ -75,6 +75,27 @@
     return `<div class="chip-stack-wrap"><div class="chip-stack-discs">${discs}</div>${opts.hideLabel ? "" : `<div class="chip-stack-label">${fmt(amount)}</div>`}</div>`;
   }
 
+  // A real betting circle sitting directly on the felt — main bet or a
+  // side bet — showing an actual chip pile (colored via the same
+  // chipStyle() the tray uses) instead of a number in a box off to the
+  // side. `key` identifies it as a click-to-target and drag-drop
+  // destination; `active` highlights whichever spot chip clicks currently
+  // go to.
+  function betSpotHtml(key, amount, active, label, small) {
+    const size = small ? 62 : 92;
+    const chipSize = small ? 15 : 22;
+    const n = amount > 0 ? Math.min(4, Math.max(1, Math.round(Math.log10(Math.max(amount, 1)) - 0.5))) : 0;
+    const pileHtml = Array.from({ length: n }, (_, i) => `
+      <div class="bet-spot-chip" style="width:${chipSize}px;height:${chipSize}px;${i > 0 ? `margin-left:-${Math.round(chipSize * 0.5)}px;` : ""}${chipStyle(amount)}"></div>`).join("");
+    return `<div class="ov-bet-spot ${active ? "active" : ""}" data-target="${key}" style="width:${size}px;height:${size}px" title="Click to select, then click or drag a chip here">
+      <div class="ov-bet-spot-ring"></div>
+      <div class="ov-bet-spot-label">${label}</div>
+      ${amount > 0
+        ? `<div class="bet-spot-pile">${pileHtml}</div><div class="ov-bet-spot-amt">${fmt(amount)}</div>`
+        : ""}
+    </div>`;
+  }
+
   // The curved felt rules text every real table has printed on it — a
   // gentle arc over the dealer's spot plus the two rule lines beneath.
   // Purely decorative/informational (no click targets), and the actual
@@ -114,7 +135,7 @@
   // callers need to re-wire its click handler after each render — same
   // pattern as every other button in this file.
   function rulesButtonRowHtml() {
-    return `<div class="row" style="justify-content:flex-end;margin-bottom:6px"><button class="btn small" id="saltys-bj-rules-btn">📖 House Rules</button></div>`;
+    return `<div class="row" style="justify-content:flex-end;gap:6px;margin-bottom:6px">${soundToggleHtml()}<button class="btn small" id="saltys-bj-rules-btn">📖 House Rules</button></div>`;
   }
   function wireRulesButton(root) {
     const btn = root && root.querySelector("#saltys-bj-rules-btn");
@@ -185,6 +206,57 @@
   // ensureLiveStyle() (called only by the live table), so solo's side-bet
   // indicators rendered with no styling at all — this fixes that by giving
   // both modes one shared style tag to inject.
+  const LS_SOUND_ENABLED = "saltys_bj_sound_enabled";
+  function soundEnabled() {
+    const v = localStorage.getItem(LS_SOUND_ENABLED);
+    return v === null ? true : v === "1";
+  }
+  function setSoundEnabled(on) { localStorage.setItem(LS_SOUND_ENABLED, on ? "1" : "0"); }
+
+  // A short synthesized "card snap" — filtered noise with a fast decay —
+  // instead of a hosted audio file, so there's nothing to fetch, no CORS
+  // risk, and no dependency on an external host staying up. Lazily creates
+  // the AudioContext on first use since browsers require a user gesture
+  // (a button click) before audio is allowed to play, which dealing
+  // already is.
+  let audioCtx = null;
+  function getAudioCtx() {
+    if (audioCtx) return audioCtx;
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch (e) { return null; }
+    return audioCtx;
+  }
+  function playDealSound() {
+    if (!soundEnabled()) return;
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    const now = ctx.currentTime;
+    const dur = 0.07;
+    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.value = 2400;
+    filter.Q.value = 0.8;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.32, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    noise.connect(filter).connect(gain).connect(ctx.destination);
+    noise.start(now);
+    noise.stop(now + dur + 0.01);
+  }
+  function soundToggleHtml() {
+    return `<button class="btn small" id="saltys-bj-sound-btn" title="Toggle dealing sound">${soundEnabled() ? "🔊" : "🔇"}</button>`;
+  }
+  function wireSoundToggle(root, renderFn) {
+    const btn = root && root.querySelector("#saltys-bj-sound-btn");
+    if (btn) btn.addEventListener("click", () => { setSoundEnabled(!soundEnabled()); renderFn(); });
+  }
+
   function ensureBlackjackSharedStyle() {
     if (document.getElementById("saltys-bj-shared-style")) return;
     const s = document.createElement("style");
@@ -216,6 +288,36 @@
       #${OVERLAY_ID} .chip-stack-discs{ display:flex; flex-direction:row; align-items:center; }
       #${OVERLAY_ID} .chip-stack-disc{ border-radius:50%; border:2px solid #1a1400; flex-shrink:0; box-shadow:0 2px 4px rgba(0,0,0,.5), inset 0 0 0 2px rgba(255,255,255,.12); }
       #${OVERLAY_ID} .chip-stack-label{ font:700 11px/1 "JetBrains Mono",monospace; color:var(--gold-bright); text-shadow:0 1px 3px rgba(0,0,0,.8); white-space:nowrap; }
+
+      /* --- bet rail: real betting circles hanging off the table's bottom
+             edge, and the chip tray built right into the rail below them,
+             instead of a separate boxed panel elsewhere on the page --- */
+      #${OVERLAY_ID} .ov-bet-rail{
+        display:flex; justify-content:center; align-items:flex-end; gap:22px; flex-wrap:wrap;
+        margin:-22px auto 0; padding:16px 20px 10px; max-width:520px; position:relative; z-index:1;
+        background:radial-gradient(ellipse at 50% 0%, rgba(20,60,44,.92), rgba(9,30,22,.88) 75%);
+        border:1px solid rgba(212,175,55,.18); border-top:none; border-radius:0 0 32px 32px;
+        box-shadow:inset 0 8px 16px -8px rgba(0,0,0,.5);
+      }
+      #${OVERLAY_ID} .ov-bet-spot{
+        position:relative; border-radius:50%; flex:none; cursor:pointer;
+        background:radial-gradient(circle at 50% 40%, #10261c, #0b1a13 75%);
+        border:2px dashed var(--gold); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+        transition:box-shadow .15s ease, border-color .15s ease, transform .15s ease;
+      }
+      #${OVERLAY_ID} .ov-bet-spot.active{
+        border-style:solid; border-color:var(--gold-bright); transform:translateY(-3px);
+        box-shadow:0 0 0 3px rgba(212,175,55,.3), 0 0 18px rgba(212,175,55,.4);
+      }
+      #${OVERLAY_ID} .ov-bet-spot.drag-over{ box-shadow:0 0 0 4px rgba(212,175,55,.55); }
+      #${OVERLAY_ID} .ov-bet-spot-ring{ position:absolute; inset:6px; border-radius:50%; border:1px solid rgba(212,175,55,.25); pointer-events:none; }
+      #${OVERLAY_ID} .ov-bet-spot-label{ font:700 9px/1 "Oswald",sans-serif; text-transform:uppercase; letter-spacing:.5px; color:var(--text-dim); pointer-events:none; }
+      #${OVERLAY_ID} .ov-bet-spot-amt{ font:700 11px/1.2 "JetBrains Mono",monospace; color:var(--gold-bright); pointer-events:none; }
+      #${OVERLAY_ID} .ov-chip-rail{
+        margin:10px auto 0; padding:14px 16px; max-width:640px; border-radius:14px;
+        background:linear-gradient(180deg, #2a1608, #1a0f05); border:1px solid #4a2f14;
+        box-shadow:inset 0 2px 8px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.3);
+      }
 
       /* --- felt rules banner (the curved "BLACKJACK PAYS 3 TO 2" text) --- */
       #${OVERLAY_ID} .ov-banner{ position:absolute; top:0.5%; left:50%; transform:translateX(-50%); width:46%; max-width:360px; pointer-events:none; z-index:0; }
@@ -490,9 +592,19 @@
     function freshState() {
       return {
         phase: "betting", selectedSeats: [], betPerHand: Math.min(100, MAX_BET),
-        sidePPPerHand: 0, side21PerHand: 0, hands: [], dealer: [], dealerHoleHidden: true,
+        sidePPPerHand: 0, side21PerHand: 0, activeBetTarget: "main", hands: [], dealer: [], dealerHoleHidden: true,
         activeHandIndex: 0, insuranceOffered: false, insuranceBet: 0, insuranceResolved: false, lastResults: null,
       };
+    }
+    function getBetFor(target) {
+      if (target === "pp") return state.sidePPPerHand;
+      if (target === "213") return state.side21PerHand;
+      return state.betPerHand;
+    }
+    function setBetFor(target, v) {
+      if (target === "pp") state.sidePPPerHand = v;
+      else if (target === "213") state.side21PerHand = v;
+      else state.betPerHand = v;
     }
     function newHand(cards, bet, sidePP = 0, side21 = 0, seatIdx) {
       return {
@@ -530,10 +642,12 @@
         for (const hand of state.hands) {
           hand.cards.push(shoe.draw());
           render();
+          playDealSound();
           await delay(SOLO_DEAL_CARD_MS);
         }
         state.dealer.push(shoe.draw());
         render();
+        playDealSound();
         await delay(SOLO_DEAL_CARD_MS);
       }
       for (const hand of state.hands) {
@@ -624,10 +738,11 @@
         hand.cards.push(shoe.draw());
         hand.acted = true;
         render();
+        playDealSound();
         await delay(SOLO_DEAL_CARD_MS);
         const v = bjHandValue(hand.cards).total;
         if (v > 21) hand.status = "bust";
-        else if (hand.isSplitAces) hand.status = "stood";
+        else if (v === 21 || hand.isSplitAces) hand.status = "stood";
       } else if (action === "stand") {
         hand.status = "stood";
       } else if (action === "double") {
@@ -636,6 +751,7 @@
         hand.bet *= 2;
         hand.cards.push(shoe.draw());
         render();
+        playDealSound();
         await delay(SOLO_DEAL_CARD_MS);
         hand.status = bjHandValue(hand.cards).total > 21 ? "bust" : "stood";
       } else if (action === "split") {
@@ -654,9 +770,11 @@
         await delay(SOLO_DEAL_CARD_MS);
         hand.cards.push(shoe.draw());
         render();
+        playDealSound();
         await delay(SOLO_DEAL_CARD_MS);
         newH.cards.push(shoe.draw());
         render();
+        playDealSound();
         await delay(SOLO_DEAL_CARD_MS);
         if (isAces) { hand.status = "stood"; newH.status = "stood"; }
       } else if (action === "surrender") {
@@ -682,6 +800,7 @@
           if (total > 21 || total > 17 || (total === 17 && (!soft || DEALER_STANDS_SOFT_17))) break;
           state.dealer.push(shoe.draw());
           render();
+          playDealSound();
           await delay(SOLO_DEAL_CARD_MS);
         }
       }
@@ -848,28 +967,40 @@
           const picked = state.selectedSeats.includes(i);
           return `<div class="ov-seat" data-seat="${i}" style="left:${pos.left}%;top:${pos.top}%;cursor:pointer">
             <div class="ov-cardslot ${picked ? "" : "empty"}" style="transform:rotate(${pos.rotate});${picked ? "border-color:var(--gold)" : ""}"></div>
-            <div style="min-height:34px;display:flex;align-items:flex-end;justify-content:center">${picked ? chipStackHtml(state.betPerHand, { size: 18 }) : ""}</div>
           </div>`;
         }).join("");
+        const target = state.activeBetTarget || "main";
+        const betRailHtml = `<div class="ov-bet-rail">
+          ${betSpotHtml("pp", state.sidePPPerHand, target === "pp", "Pairs", true)}
+          ${betSpotHtml("main", state.betPerHand, target === "main", "Bet", false)}
+          ${betSpotHtml("213", state.side21PerHand, target === "213", "21+3", true)}
+        </div>`;
+        const totalWager = (state.betPerHand + (state.sidePPPerHand || 0) + (state.side21PerHand || 0)) * state.selectedSeats.length;
         root.innerHTML = rulesButtonRowHtml() + `<div class="ov-wrap"><div class="ov-table">
             ${tableBannerHtml()}
             ${shoeDecorHtml()}
             <div class="ov-dealer"><div class="ov-dealer-hand"></div><div class="ov-dealer-label">Dealer's Cards</div></div>
-            <div class="ov-hint">Click a seat to play that hand</div>
+            <div class="ov-hint">Click a seat, then place chips below</div>
             ${seatPickHtml}
-          </div></div>
-          <div class="panel col" style="max-width:420px;margin:16px auto 0;gap:10px">
-            <div class="muted center">${state.selectedSeats.length} seat${state.selectedSeats.length === 1 ? "" : "s"} selected</div>
-            <div class="row"><span class="muted">Bet per hand</span></div>
-            ${renderBetControls("sbj", state.betPerHand, busy)}
-            <div class="lbj-sidebet-row">
-              <input type="text" id="sbj-pp" placeholder="Pairs (e.g. 100k)" value="${state.sidePPPerHand ? fmt(state.sidePPPerHand) : ""}" ${busy ? "disabled" : ""}>
-              <input type="text" id="sbj-213" placeholder="21+3 (e.g. 1m)" value="${state.side21PerHand ? fmt(state.side21PerHand) : ""}" ${busy ? "disabled" : ""}>
+          </div>
+          <div class="ov-bet-rail">${betRailHtml}</div>
+          <div class="ov-chip-rail">
+            <div class="chip-select">
+              ${CHIP_DENOMS.map((v) => `
+                <div class="chip-btn" data-chip="${v}" ${busy ? "" : 'draggable="true"'} style="${chipStyle(v)}">
+                  <span class="chip-face">${chipLabel(v)}</span>
+                </div>
+              `).join("")}
             </div>
-            <div class="muted">Total wager: ${fmt((state.betPerHand + (state.sidePPPerHand || 0) + (state.side21PerHand || 0)) * state.selectedSeats.length)}</div>
-            <button class="btn primary" id="sbj-deal" ${busy || !state.selectedSeats.length ? "disabled" : ""}>Deal</button>
-          </div>`;
+            <div class="row center" style="gap:10px;flex-wrap:wrap">
+              <button class="btn small gold" id="sbj-bet-max" ${busy ? "disabled" : ""}>Max</button>
+              <button class="btn small" id="sbj-bet-clear" ${busy ? "disabled" : ""}>Clear</button>
+              <span class="muted">${state.selectedSeats.length} seat${state.selectedSeats.length === 1 ? "" : "s"} · Total wager: ${fmt(totalWager)}</span>
+              <button class="btn primary" id="sbj-deal" ${busy || !state.selectedSeats.length || !state.betPerHand ? "disabled" : ""}>Deal</button>
+            </div>
+          </div></div>`;
         wireRulesButton(root);
+        wireSoundToggle(root, render);
         root.querySelectorAll("[data-seat]").forEach((el) => el.addEventListener("click", () => {
           const i = parseInt(el.dataset.seat, 10);
           const idx = state.selectedSeats.indexOf(i);
@@ -878,19 +1009,48 @@
           else toast(`You can only play up to ${MAX_HANDS} seats at once.`);
           render();
         }));
-        wireBetControls(root, "sbj", () => state.betPerHand, (v) => { state.betPerHand = v; render(); });
-        const ppInput = root.querySelector("#sbj-pp");
-        if (ppInput) ppInput.addEventListener("change", (e) => {
-          const parsed = parseAmount(e.target.value);
-          state.sidePPPerHand = !isNaN(parsed) ? clamp(parsed, 0, MAX_BET) : 0;
+
+        // Click a spot to make it the active chip-click target; drag a chip
+        // straight onto any spot regardless of which one is active — both
+        // work, matching how you'd actually place chips at a real table.
+        root.querySelectorAll(".ov-bet-spot").forEach((spot) => {
+          spot.addEventListener("click", () => { state.activeBetTarget = spot.dataset.target; render(); });
+          spot.addEventListener("dragover", (e) => { e.preventDefault(); spot.classList.add("drag-over"); });
+          spot.addEventListener("dragleave", () => spot.classList.remove("drag-over"));
+          spot.addEventListener("drop", (e) => {
+            e.preventDefault();
+            spot.classList.remove("drag-over");
+            const amt = parseInt(e.dataTransfer.getData("text/plain"), 10);
+            if (!isNaN(amt)) { setBetFor(spot.dataset.target, clamp(getBetFor(spot.dataset.target) + amt, 0, MAX_BET)); render(); }
+          });
+        });
+        root.querySelectorAll("[data-chip]").forEach((chip) => {
+          const addChip = () => { const t = state.activeBetTarget || "main"; setBetFor(t, clamp(getBetFor(t) + parseInt(chip.dataset.chip, 10), 0, MAX_BET)); render(); };
+          chip.addEventListener("click", addChip);
+          chip.addEventListener("dragstart", (e) => {
+            e.dataTransfer.setData("text/plain", chip.dataset.chip);
+            e.dataTransfer.effectAllowed = "copy";
+            const ghost = chip.cloneNode(true);
+            ghost.style.position = "absolute"; ghost.style.top = "-1000px"; ghost.style.left = "-1000px"; ghost.style.pointerEvents = "none";
+            document.body.appendChild(ghost);
+            e.dataTransfer.setDragImage(ghost, ghost.offsetWidth / 2, ghost.offsetHeight / 2);
+            setTimeout(() => ghost.remove(), 0);
+          });
+        });
+        const chipSelect = root.querySelector(".chip-select");
+        if (chipSelect) chipSelect.addEventListener("wheel", (e) => {
+          if (chipSelect.scrollWidth <= chipSelect.clientWidth) return;
+          e.preventDefault();
+          chipSelect.scrollLeft += e.deltaY;
+        }, { passive: false });
+        const maxBtn = root.querySelector("#sbj-bet-max");
+        if (maxBtn) maxBtn.addEventListener("click", () => {
+          const t = state.activeBetTarget || "main";
+          setBetFor(t, clamp(Math.floor(Balance.current), 0, MAX_BET));
           render();
         });
-        const t213Input = root.querySelector("#sbj-213");
-        if (t213Input) t213Input.addEventListener("change", (e) => {
-          const parsed = parseAmount(e.target.value);
-          state.side21PerHand = !isNaN(parsed) ? clamp(parsed, 0, MAX_BET) : 0;
-          render();
-        });
+        const clearBtn = root.querySelector("#sbj-bet-clear");
+        if (clearBtn) clearBtn.addEventListener("click", () => { setBetFor(state.activeBetTarget || "main", 0); render(); });
         root.querySelector("#sbj-deal").addEventListener("click", startDeal);
         return;
       }
@@ -919,6 +1079,7 @@
       }
       root.innerHTML = rulesButtonRowHtml() + renderSoloOvalTable() + `<div class="mt16">${controls}</div>`;
       wireRulesButton(root);
+      wireSoundToggle(root, render);
       if (state.phase === "player") {
         root.querySelector("#sbj-hit").addEventListener("click", () => act("hit"));
         root.querySelector("#sbj-stand").addEventListener("click", () => act("stand"));
@@ -968,13 +1129,13 @@
   // =====================================================================
   const LiveBlackjack = (function () {
     let root = null, tableId = "table-mid", unsubTable = null, unsubChat = null, tickTimer = null;
-    let mySeatIndex = -1, tableDoc = null, chatMessages = [], shoe = null, busy = false;
+    let mySeatIndex = -1, tableDoc = null, chatMessages = [], shoe = null, busy = false, lastCardCount = -1;
     let myPendingBet = 100, myPendingPP = 0, myPending213 = 0, myPendingBehind = 50;
     const dealtAnimated = new Set();
 
     function tref() { return getDb().collection("blackjacktables").doc(tableId); }
     function chatRef() { return tref().collection("chat"); }
-    function setTable(id) { tableId = id; mySeatIndex = -1; }
+    function setTable(id) { tableId = id; mySeatIndex = -1; lastCardCount = -1; }
 
     async function ensureTableDoc() {
       const snap = await tref().get();
@@ -1277,7 +1438,7 @@
             hand.acted = true;
             const v = bjHandValue(hand.cards).total;
             if (v > 21) hand.status = "bust";
-            else if (hand.isSplitAces) hand.status = "stood";
+            else if (v === 21 || hand.isSplitAces) hand.status = "stood";
           } else if (action === "stand") {
             hand.status = "stood"; hand.acted = true;
           } else if (action === "double") {
@@ -1623,6 +1784,9 @@
       if (!root || !tableDoc) return;
       ensureLiveStyle();
       ensureBlackjackSharedStyle();
+      const cardCount = tableDoc.dealer.length + tableDoc.seats.reduce((s, seat) => s + seat.hands.reduce((s2, h) => s2 + h.cards.length, 0), 0);
+      if (lastCardCount >= 0 && cardCount > lastCardCount) playDealSound();
+      lastCardCount = cardCount;
       const dealerHtml = tableDoc.dealer.map((c, i) => cardEl(c, i > 0 && tableDoc.dealerHoleHidden)).join("");
       const seatsHtml = tableDoc.seats.map((s, i) => seatHtml(s, i)).join("");
       const seat = tableDoc.seats[mySeatIndex];
@@ -1686,6 +1850,7 @@
       root.querySelectorAll("[data-insure]").forEach((b) => b.addEventListener("click", () => takeInsurance(parseInt(b.dataset.insure, 10))));
       root.querySelectorAll("[data-decline-insure]").forEach((b) => b.addEventListener("click", () => declineInsurance(parseInt(b.dataset.declineInsure, 10))));
       wireRulesButton(root);
+      wireSoundToggle(root, renderInner);
       if (myTurn) root.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => act(b.dataset.act)));
 
       tableDoc.seats.forEach((seatX, i) => {

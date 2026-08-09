@@ -166,7 +166,7 @@
             </div>
           </div>
         </div>
-        <div class="chip-select">
+        <div class="chip-select" id="${idPrefix}-chip-select">
           ${CHIP_DENOMS.map((v) => `
             <div class="chip-btn" data-chip="${v}" ${disabled ? "" : 'draggable="true"'} style="${chipStyle(v)}">
               <span class="chip-face">${chipLabel(v)}</span>
@@ -185,6 +185,14 @@
   // Chips are both clickable and draggable (HTML5 drag-and-drop) onto the
   // bet-spot — dropping one adds its denomination to the current bet, same
   // as clicking it.
+  // Chip trays are rebuilt from scratch (root.innerHTML = ...) on every bet
+  // change, which resets a fresh element's scrollLeft to 0 — losing your
+  // place in a 19-chip tray every single click. This survives the rebuild
+  // by living outside the DOM entirely, keyed per bet-control instance
+  // since more than one can be on screen at once (e.g. live mode's main
+  // bet and behind-bet panels).
+  const chipScrollPositions = {};
+
   function wireBetControls(root, idPrefix, getBet, setBet) {
     const input = root.querySelector(`#${idPrefix}-bet-text`);
     if (input) {
@@ -231,13 +239,15 @@
     if (maxBtn) maxBtn.addEventListener("click", () => setBet(clamp(Math.floor(Balance.current), MIN_BET, MAX_BET)));
     const clearBtn = root.querySelector(`#${idPrefix}-bet-clear`);
     if (clearBtn) clearBtn.addEventListener("click", () => setBet(0));
-    const chipSelect = root.querySelector(".chip-select");
+    const chipSelect = root.querySelector(`#${idPrefix}-chip-select`);
     if (chipSelect) {
+      chipSelect.scrollLeft = chipScrollPositions[idPrefix] || 0; // restore after the DOM rebuild reset it to 0
       chipSelect.addEventListener("wheel", (e) => {
         if (chipSelect.scrollWidth <= chipSelect.clientWidth) return; // nothing to scroll
         e.preventDefault();
         chipSelect.scrollLeft += e.deltaY;
       }, { passive: false });
+      chipSelect.addEventListener("scroll", () => { chipScrollPositions[idPrefix] = chipSelect.scrollLeft; });
     }
   }
 

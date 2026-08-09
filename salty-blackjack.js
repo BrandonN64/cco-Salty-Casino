@@ -213,12 +213,16 @@
   }
   function setSoundEnabled(on) { localStorage.setItem(LS_SOUND_ENABLED, on ? "1" : "0"); }
 
-  // A short synthesized "card snap" — filtered noise with a fast decay —
-  // instead of a hosted audio file, so there's nothing to fetch, no CORS
-  // risk, and no dependency on an external host staying up. Lazily creates
-  // the AudioContext on first use since browsers require a user gesture
-  // (a button click) before audio is allowed to play, which dealing
-  // already is.
+  // A synthesized card-deal sound — no hosted audio file, so nothing to
+  // fetch, no CORS risk, no dependency on an external host staying up.
+  // This can't be an actual recorded sample (no audio library or licensed
+  // sound source available here) — it's three short noise layers shaped to
+  // match the real acoustic structure of a card being dealt: a sharp snap
+  // as it leaves the hand, an airy flutter as it slides through the air,
+  // and a soft tap as it lands, rather than one flat noise burst. Lazily
+  // creates the AudioContext on first use since browsers require a user
+  // gesture (a button click) before audio is allowed to play, which
+  // dealing already is.
   let audioCtx = null;
   function getAudioCtx() {
     if (audioCtx) return audioCtx;
@@ -232,22 +236,40 @@
     if (!ctx) return;
     if (ctx.state === "suspended") ctx.resume().catch(() => {});
     const now = ctx.currentTime;
-    const dur = 0.07;
-    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
-    const noise = ctx.createBufferSource();
-    noise.buffer = buffer;
-    const filter = ctx.createBiquadFilter();
-    filter.type = "bandpass";
-    filter.frequency.value = 2400;
-    filter.Q.value = 0.8;
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.32, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
-    noise.connect(filter).connect(gain).connect(ctx.destination);
-    noise.start(now);
-    noise.stop(now + dur + 0.01);
+
+    function noiseBuffer(durSec) {
+      const buf = ctx.createBuffer(1, Math.max(1, Math.floor(ctx.sampleRate * durSec)), ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      return buf;
+    }
+    function fireLayer(startAt, durSec, filterType, freqStart, freqEnd, peakGain, attackSec) {
+      const src = ctx.createBufferSource();
+      src.buffer = noiseBuffer(durSec);
+      const filter = ctx.createBiquadFilter();
+      filter.type = filterType;
+      filter.Q.value = 1.1;
+      filter.frequency.setValueAtTime(freqStart, startAt);
+      if (freqEnd !== freqStart) filter.frequency.exponentialRampToValueAtTime(freqEnd, startAt + durSec);
+      const gain = ctx.createGain();
+      if (attackSec) {
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.linearRampToValueAtTime(peakGain, startAt + attackSec);
+      } else {
+        gain.gain.setValueAtTime(peakGain, startAt);
+      }
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + durSec);
+      src.connect(filter).connect(gain).connect(ctx.destination);
+      src.start(startAt);
+      src.stop(startAt + durSec + 0.01);
+    }
+
+    // Snap: the card leaving the hand — very short, sharp, high-frequency.
+    fireLayer(now, 0.012, "highpass", 4500, 4500, 0.4, 0);
+    // Flutter: the airy whoosh as it glides, filter sweeping downward.
+    fireLayer(now + 0.006, 0.05, "bandpass", 3200, 1400, 0.22, 0.008);
+    // Landing tap: soft low thump right at the end, as it settles on felt.
+    fireLayer(now + 0.04, 0.02, "lowpass", 900, 900, 0.18, 0);
   }
   function soundToggleHtml() {
     return `<button class="btn small" id="saltys-bj-sound-btn" title="Toggle dealing sound">${soundEnabled() ? "🔊" : "🔇"}</button>`;
@@ -586,7 +608,7 @@
   const SoloBlackjackMulti = (function () {
     const MAX_HANDS = 5;
     const SOLO_DEAL_CARD_MS = 450;
-    let root = null, shoe = null, state = null, busy = false;
+    let root = null, shoe = null, state = null, busy = false, chipScrollPos = 0;
     const dealtAnimated = new Set();
 
     function freshState() {
@@ -1038,11 +1060,15 @@
           });
         });
         const chipSelect = root.querySelector(".chip-select");
-        if (chipSelect) chipSelect.addEventListener("wheel", (e) => {
-          if (chipSelect.scrollWidth <= chipSelect.clientWidth) return;
-          e.preventDefault();
-          chipSelect.scrollLeft += e.deltaY;
-        }, { passive: false });
+        if (chipSelect) {
+          chipSelect.scrollLeft = chipScrollPos; // restore after the DOM rebuild reset it to 0
+          chipSelect.addEventListener("wheel", (e) => {
+            if (chipSelect.scrollWidth <= chipSelect.clientWidth) return;
+            e.preventDefault();
+            chipSelect.scrollLeft += e.deltaY;
+          }, { passive: false });
+          chipSelect.addEventListener("scroll", () => { chipScrollPos = chipSelect.scrollLeft; });
+        }
         const maxBtn = root.querySelector("#sbj-bet-max");
         if (maxBtn) maxBtn.addEventListener("click", () => {
           const t = state.activeBetTarget || "main";

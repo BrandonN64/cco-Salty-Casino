@@ -1076,7 +1076,12 @@
           render();
         });
         const clearBtn = root.querySelector("#sbj-bet-clear");
-        if (clearBtn) clearBtn.addEventListener("click", () => { setBetFor(state.activeBetTarget || "main", 0); render(); });
+        if (clearBtn) clearBtn.addEventListener("click", () => {
+          state.betPerHand = 0;
+          state.sidePPPerHand = 0;
+          state.side21PerHand = 0;
+          render();
+        });
         root.querySelector("#sbj-deal").addEventListener("click", startDeal);
         return;
       }

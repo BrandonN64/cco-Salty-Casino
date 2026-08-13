@@ -50,6 +50,14 @@
   // natural blackjack (~1-in-84) — rare enough to earn the bigger tier.
   const JACKPOT_TIER = "major";
 
+  // The jackpot pool grows in tiny fractions of a token per round (0.05%
+  // of the wager), so rounding it to a whole number for display would
+  // make it look completely static for dozens of rounds. Two decimals
+  // makes the growth actually visible round to round.
+  function fmtJackpot(n) {
+    return (n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
   function chipStackHtml(amount, opts = {}) {
     if (!amount || amount <= 0) return "";
     const size = opts.size || 24;
@@ -163,7 +171,7 @@
           <p><b>21+3</b> — pays out if your two cards plus the dealer's face-up card form a poker hand: a flush, straight, three of a kind, straight flush, or suited trips — suited trips (three matching cards, same rank AND suit) is the rarest and pays the most.</p>
 
           <h3>Progressive jackpot</h3>
-          <p>0.05% of every wager placed here (and at Baccarat) feeds one shared jackpot pool, whether or not you bet on it. <b>Collecting it is separate</b> — place the flat <b>Jackpot</b> bet (${fmt(JACKPOT_SIDE_BET)} per hand) to be eligible that round. With it down, a <b>suited three-of-a-kind</b> — your two cards plus the dealer's up card, all the same rank AND suit, the same rare "suited trips" condition 21+3 already pays its top rate on — pays out a share of the pool. Without the Jackpot bet, that hand still resolves normally; you just don't collect the extra. Like any other side bet, the Jackpot bet is lost on hands that don't qualify. This is deliberately a much rarer trigger than a plain suited natural blackjack (roughly 1 in 4,800 hands vs. 1 in 84) so it actually feels like a jackpot instead of a frequent bonus.</p>
+          <p>0.05% of every wager placed here (and at Baccarat) feeds one shared jackpot pool, whether or not you bet on it. <b>Collecting it is separate</b> — place the flat <b>Jackpot</b> bet (${fmt(JACKPOT_SIDE_BET)} per hand) to be eligible that round. With it down, a <b>suited three-of-a-kind</b> — your two cards plus the dealer's up card, all the same rank AND suit, the same rare "suited trips" condition 21+3 already pays its top rate on — pays out a share of the pool. Without the Jackpot bet, that hand still resolves normally; you just don't collect the extra. Like any other side bet, the Jackpot bet is lost on hands that don't qualify. This is deliberately a much rarer trigger than a plain suited natural blackjack (roughly 1 in 4,800 hands vs. 1 in 84) so it actually feels like a jackpot instead of a frequent bonus. The pool itself grows slowly by design (a fraction of a token per round on typical bets) — the banner shows two decimal places so that growth is actually visible.</p>
         </div>
         <div class="row" style="justify-content:flex-end;margin-top:16px">
           <button class="btn primary" id="saltys-bj-rules-close">Got it</button>
@@ -676,9 +684,6 @@
           if (r) { const win = tw * SIDE_BET_PAYTABLES.twentyPlusThree[r] + tw; await Balance.applyDelta(win, "solo_bj_213_win"); sbProfit += win - tw; }
           else sbProfit -= tw;
         }
-        // Jackpot side bet already resolved (and paid, if it won) back at
-        // deal time — hand.jackpotProfit is just folded into the totals
-        // here so the round summary reflects it.
         if (hand.sideBets && hand.sideBets.jackpot > 0 && hand.jackpotProfit != null) {
           sbProfit += hand.jackpotProfit;
           jackpotProfitTotal += hand.jackpotProfit;
@@ -800,7 +805,7 @@
     function render() {
       if (!root) return;
       ensureBlackjackSharedStyle();
-      const jackpotBanner = `<div class="sbj-jackpot-banner" id="sbj-jackpot-banner">PROGRESSIVE JACKPOT: ${fmt(jackpotAmount)}</div>`;
+      const jackpotBanner = `<div class="sbj-jackpot-banner" id="sbj-jackpot-banner">PROGRESSIVE JACKPOT: ${fmtJackpot(jackpotAmount)}</div>`;
       if (state.phase === "betting") {
         const seatPickHtml = SEAT_POS.map((pos, i) => {
           const picked = state.selectedSeats.includes(i);
@@ -982,7 +987,7 @@
             jackpotAmount = pool.amount;
             const el2 = document.getElementById("sbj-jackpot-banner");
             if (el2) {
-              el2.textContent = `PROGRESSIVE JACKPOT: ${fmt(jackpotAmount)}`;
+              el2.textContent = `PROGRESSIVE JACKPOT: ${fmtJackpot(jackpotAmount)}`;
               el2.classList.add("pulse");
               setTimeout(() => el2.classList.remove("pulse"), 500);
             }

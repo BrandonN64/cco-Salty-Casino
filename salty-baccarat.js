@@ -6,12 +6,14 @@
 // the home grid, next to Blackjack.
 //
 // Punto Banco baccarat, solo vs the house shoe:
-//   - Standard Player / Banker / Tie betting circle, plus a side-bet strip
-//     (Player Pair, Perfect Pair, Banker Pair, Big, Small).
-//   - Optional face-down "squeeze" dealing: drag a card open from its
-//     corner instead of it auto-flipping, same as a real table's reveal
-//     ritual. Settlement happens the instant the round resolves either
-//     way — squeezing is purely the reveal, never a wait state — so
+//   - Standard Player / Banker / Tie betting circle (mutually exclusive —
+//     placing on one clears the other two, since only one of them can
+//     actually win a given round), plus a side-bet strip (Player Pair,
+//     Perfect Pair, Banker Pair, Big, Small).
+//   - Optional face-down dealing: drag a card open from its corner
+//     instead of it auto-flipping, same as a real table's squeeze
+//     reveal. Settlement happens the instant the round resolves either
+//     way — the drag reveal is purely cosmetic, never a wait state — so
 //     nobody can get stuck on an unrevealed card.
 //   - Feeds the shared cross-game progressive jackpot (window.SaltyJackpot)
 //     with 0.05% of every wager placed here (main bets AND side bets,
@@ -41,6 +43,12 @@
   // big your Player/Banker bet is. Tied to MIN_BET so it scales sanely if
   // the house ever changes table minimums.
   const JACKPOT_SIDE_BET = MIN_BET * 5;
+
+  // The three main outcomes are mutually exclusive in this UI — only one
+  // of Player/Banker/Tie can actually happen each round, so placing chips
+  // on one clears any pending amount on the other two rather than letting
+  // all three build up at once.
+  const MAIN_BET_KEYS = ["player", "banker", "tie"];
 
   const PAYOUTS = {
     player: 1,
@@ -81,6 +89,14 @@
       return { tier: "minor", detail: "Perfect Pair on the natural-winning hand" };
     }
     return null;
+  }
+
+  // The jackpot pool grows in tiny fractions of a token per round (0.05%
+  // of the wager), so rounding it to a whole number for display would
+  // make it look completely static for dozens of rounds. Two decimals
+  // makes the growth actually visible round to round.
+  function fmtJackpot(n) {
+    return (n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
   function chipStackHtml(amount, opts = {}) {
@@ -157,7 +173,7 @@
         </div>
         <div class="rules-body">
           <h3>How a round works</h3>
-          <p>Place a bet on Player, Banker, or Tie (side bets are optional, alongside), then Player and Banker are each dealt two cards. Whichever hand is closer to 9 wins. A third card is drawn for one or both hands under a fixed set of rules — no decisions, just the tableau below.</p>
+          <p>Place a bet on Player, Banker, or Tie (only one of the three at a time — side bets are separate and can be placed alongside it), then Player and Banker are each dealt two cards. Whichever hand is closer to 9 wins. A third card is drawn for one or both hands under a fixed set of rules — no decisions, just the tableau below.</p>
 
           <h3>Card values</h3>
           <p>Aces count as 1, number cards count as their number, and 10/J/Q/K all count as 0. A hand's total is the sum of its cards' values, keeping only the last digit (so 7+8=15 counts as 5).</p>
@@ -179,12 +195,12 @@
           <p><b>Perfect Pair</b> — pays ${PAYOUTS.perfectPair}:1 if either hand's first two cards are an exact suited pair (same rank and suit).</p>
           <p><b>Big</b> — pays ${PAYOUTS.big}:1 if the round deals 5 or 6 cards total (and isn't a tie). <b>Small</b> — pays ${PAYOUTS.small}:1 if the round deals exactly 4 cards total.</p>
 
-          <h3>Squeeze dealing</h3>
-          <p>Turn on "Deal face-down" and every card is dealt back-up — drag from its top-left corner to peel it open yourself, just like a real table's reveal. The round is already settled the instant it's dealt; squeezing only controls when you see it, so there's never anything to wait on.</p>
+          <h3>Face-down dealing</h3>
+          <p>Turn on "Face-Down" and every card is dealt back-up — drag from its top-left corner to peel it open yourself, just like a real table's reveal. The round is already settled the instant it's dealt; revealing a card only controls when you see it, so there's never anything to wait on.</p>
 
           <h3>Progressive jackpot</h3>
           <p>0.05% of every wager placed here (and at the Blackjack tables) feeds one shared jackpot pool, whether or not you bet on it. <b>Collecting it is a separate matter</b> — just like a real casino progressive (Caribbean Stud, Casino Hold'em, progressive Blackjack side bets), you must place the flat <b>Jackpot</b> bet (${fmt(JACKPOT_SIDE_BET)}) on a given round to be eligible to win it that round. Without it, hitting a jackpot-tier hand pays nothing extra — the same way missing a side bet you didn't place doesn't pay you.</p>
-          <p>With the Jackpot bet down, the pool pays out on baccarat's rarest hands: a Perfect Pair dealt to <b>both</b> Player and Banker (Mega — the full pool), a natural 9-9 tie (Major — 25% of the pool), or a Perfect Pair on the hand that wins with a natural (Minor — 5% of the pool). Like any other side bet, the Jackpot bet itself is lost on rounds where none of these hit.</p>
+          <p>With the Jackpot bet down, the pool pays out on baccarat's rarest hands: a Perfect Pair dealt to <b>both</b> Player and Banker (Mega — the full pool), a natural 9-9 tie (Major — 25% of the pool), or a Perfect Pair on the hand that wins with a natural (Minor — 5% of the pool). Like any other side bet, the Jackpot bet itself is lost on rounds where none of these hit. The pool grows slowly by design (a fraction of a token per round on typical bets) — the display shows two decimal places so that growth is actually visible.</p>
         </div>
         <div class="row" style="justify-content:flex-end;margin-top:16px">
           <button class="btn primary" id="saltys-bac-rules-close">Got it</button>
@@ -256,11 +272,13 @@
     if (btn) btn.addEventListener("click", () => { setSoundEnabled(!soundEnabled()); renderFn(); });
   }
 
+  // Renamed from "Squeeze" to "Face-Down" per feedback — the underlying
+  // localStorage key and drag mechanic are unchanged, just the label.
   const LS_FACEDOWN_ENABLED = "saltys_bac_facedown_enabled";
   function faceDownEnabled() { return localStorage.getItem(LS_FACEDOWN_ENABLED) === "1"; }
   function setFaceDownEnabled(on) { localStorage.setItem(LS_FACEDOWN_ENABLED, on ? "1" : "0"); }
   function faceDownToggleHtml() {
-    return `<button class="btn small" id="saltys-bac-facedown-btn" title="Toggle face-down squeeze dealing">${faceDownEnabled() ? "🂠 Squeeze: On" : "🂠 Squeeze: Off"}</button>`;
+    return `<button class="btn small" id="saltys-bac-facedown-btn" title="Toggle face-down dealing">${faceDownEnabled() ? "🂠 Face-Down: On" : "🂠 Face-Down: Off"}</button>`;
   }
   function wireFaceDownToggle(root, renderFn) {
     const btn = root && root.querySelector("#saltys-bac-facedown-btn");
@@ -295,6 +313,15 @@
       #${OVERLAY_ID} .bac-win-badge.lose{ color:var(--danger); }
       #${OVERLAY_ID} .bac-win-badge.push{ color:var(--text-dim); }
 
+      /* --- corner-drag face-down reveal: a face-down card with a
+             grabbable corner. The BACK face must render at its natural
+             (unrotated) orientation so it's visible while the card sits
+             face-down — only the FRONT face carries the 180deg offset, so
+             it's the one hidden until the drag flips the inner container.
+             (Both faces previously had the 180deg offset, which is why
+             squeeze-mode cards rendered as invisible — every face was
+             showing its backface, which backface-visibility:hidden hides
+             entirely, both at rest and after a reveal.) --- */
       #${OVERLAY_ID} .bac-squeeze-wrap{ width:68px; height:96px; perspective:700px; touch-action:none; }
       #${OVERLAY_ID} .bac-squeeze-inner{ position:relative; width:100%; height:100%; transform-style:preserve-3d; transition:transform .3s cubic-bezier(.2,.8,.2,1); }
       #${OVERLAY_ID} .bac-squeeze-face{ position:absolute; inset:0; border-radius:9px; backface-visibility:hidden; box-shadow:0 3px 8px rgba(0,0,0,.4); }
@@ -302,7 +329,7 @@
       #${OVERLAY_ID} .bac-squeeze-front.red{ color:var(--red); }
       #${OVERLAY_ID} .bac-squeeze-back{
         background:repeating-linear-gradient(135deg, var(--purple), var(--purple) 6px, #241a3d 6px, #241a3d 12px);
-        border:1px solid #0006; transform:rotateY(180deg);
+        border:1px solid #0006;
       }
       #${OVERLAY_ID} .bac-squeeze-corner{
         position:absolute; top:0; left:0; width:26px; height:26px; cursor:grab; z-index:5;
@@ -323,9 +350,6 @@
       #${OVERLAY_ID} .bac-side-pay{ font:600 9px/1 "JetBrains Mono",monospace; color:var(--text-dim); }
       #${OVERLAY_ID} .bac-side-amt{ font:700 11px/1.2 "JetBrains Mono",monospace; color:var(--gold-bright); }
 
-      /* --- the flat, non-scaling jackpot qualifying bet: a distinct spot
-             from the payout side bets above, since this one buys eligibility
-             rather than paying out on its own hand condition --- */
       #${OVERLAY_ID} .bac-jackpot-spot{
         position:relative; width:120px; height:78px; border-radius:14px; cursor:pointer;
         background:radial-gradient(circle at 50% 35%, rgba(124,58,237,.25), #10261c 75%);
@@ -366,7 +390,7 @@
       return {
         phase: "betting",
         bets: { player: 0, banker: 0, tie: 0, playerPair: 0, bankerPair: 0, perfectPair: 0, big: 0, small: 0 },
-        jackpotBet: false, // flat qualifying bet — boolean toggle, not chip-stacked
+        jackpotBet: false,
         activeBetTarget: "player",
         player: [], banker: [], playerTotal: 0, bankerTotal: 0,
         playerNatural: false, bankerNatural: false, winner: null,
@@ -377,6 +401,16 @@
 
     function totalWager() {
       return Object.values(state.bets).reduce((a, b) => a + b, 0) + (state.jackpotBet ? JACKPOT_SIDE_BET : 0);
+    }
+
+    // Player/Banker/Tie are mutually exclusive: only one of the three can
+    // actually win a round, so building up chips on more than one doesn't
+    // represent a real strategy the way stacking multiple side bets does.
+    // Clearing the others is safe here — nothing is debited from Balance
+    // until Deal, so this is just discarding a pending (uncommitted)
+    // number, not refunding real money.
+    function clearOtherMainBets(keptKey) {
+      MAIN_BET_KEYS.forEach((k) => { if (k !== keptKey) state.bets[k] = 0; });
     }
 
     async function startDeal() {
@@ -495,10 +529,6 @@
         else lines.push(["Small", -bets.small]);
       }
 
-      // The jackpot side bet behaves like any other side bet: it's lost on
-      // rounds where the jackpot condition doesn't hit. When it hits AND
-      // the bet was down, the bet's own stake is returned alongside the
-      // jackpot payout below (rather than also being forfeited).
       const hit = checkJackpot(result);
       let jackpotPayout = 0, jackpotTier = null;
       if (state.jackpotBet) {
@@ -506,7 +536,7 @@
           jackpotPayout = await window.SaltyJackpot.award(hit.tier, "baccarat", hit.detail, true);
           jackpotTier = hit.tier;
           if (jackpotPayout > 0) {
-            winnings += JACKPOT_SIDE_BET; // return the qualifying stake itself
+            winnings += JACKPOT_SIDE_BET;
             lines.push(["Jackpot bet", JACKPOT_SIDE_BET]);
           } else {
             lines.push(["Jackpot bet", -JACKPOT_SIDE_BET]);
@@ -515,9 +545,6 @@
           lines.push(["Jackpot bet", -JACKPOT_SIDE_BET]);
         }
       } else if (hit) {
-        // Hit the condition with no qualifying bet down — exactly like
-        // missing any other side bet you didn't place: no payout, and
-        // nothing was risked on it either.
         lines.push([`Jackpot hand (${hit.tier}) — no Jackpot bet placed`, 0]);
       }
 
@@ -671,7 +698,7 @@
       if (!root) return;
       ensureBaccaratSharedStyle();
 
-      const jackpotBanner = `<div class="bac-jackpot-banner" id="bac-jackpot-banner">PROGRESSIVE JACKPOT: ${fmt(jackpotAmount)}</div>`;
+      const jackpotBanner = `<div class="bac-jackpot-banner" id="bac-jackpot-banner">PROGRESSIVE JACKPOT: ${fmtJackpot(jackpotAmount)}</div>`;
 
       if (state.phase === "betting") {
         const wager = totalWager();
@@ -717,13 +744,19 @@
           spot.addEventListener("drop", (e) => {
             e.preventDefault();
             spot.classList.remove("drag-over");
+            const key = spot.dataset.target;
             const amt = parseInt(e.dataTransfer.getData("text/plain"), 10);
-            if (!isNaN(amt)) { state.bets[spot.dataset.target] = clamp(state.bets[spot.dataset.target] + amt, 0, MAX_BET); render(); }
+            if (!isNaN(amt)) {
+              if (MAIN_BET_KEYS.includes(key)) clearOtherMainBets(key);
+              state.bets[key] = clamp(state.bets[key] + amt, 0, MAX_BET);
+              render();
+            }
           });
         });
         root.querySelectorAll("[data-chip]").forEach((chip) => {
           const addChip = () => {
             const t = state.activeBetTarget;
+            if (MAIN_BET_KEYS.includes(t)) clearOtherMainBets(t);
             state.bets[t] = clamp(state.bets[t] + parseInt(chip.dataset.chip, 10), 0, MAX_BET);
             render();
           };
@@ -741,6 +774,7 @@
         const maxBtn = root.querySelector("#bac-bet-max");
         if (maxBtn) maxBtn.addEventListener("click", () => {
           const t = state.activeBetTarget;
+          if (MAIN_BET_KEYS.includes(t)) clearOtherMainBets(t);
           state.bets[t] = clamp(Math.floor(Balance.current), 0, MAX_BET);
           render();
         });
@@ -759,7 +793,7 @@
       if (state.phase === "settled") {
         controls = `<div class="row center"><button class="btn primary" id="bac-rebet">Rebet ${fmt(totalWager())}</button><button class="btn" id="bac-again">Change Bet</button></div>`;
       } else {
-        controls = `<div class="center muted">${state.phase === "dealing" ? "Dealing…" : "Squeeze the cards to reveal…"}</div>`;
+        controls = `<div class="center muted">${state.phase === "dealing" ? "Dealing…" : "Reveal the cards when you're ready…"}</div>`;
       }
 
       root.innerHTML = jackpotBanner + rulesButtonRowHtml() + renderTable() + `<div class="mt16">${controls}</div>`;
@@ -801,7 +835,7 @@
             jackpotAmount = pool.amount;
             const el2 = document.getElementById("bac-jackpot-banner");
             if (el2) {
-              el2.textContent = `PROGRESSIVE JACKPOT: ${fmt(jackpotAmount)}`;
+              el2.textContent = `PROGRESSIVE JACKPOT: ${fmtJackpot(jackpotAmount)}`;
               el2.classList.add("pulse");
               setTimeout(() => el2.classList.remove("pulse"), 500);
             }

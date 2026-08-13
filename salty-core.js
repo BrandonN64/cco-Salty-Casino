@@ -4,9 +4,9 @@
 // Provides: config constants, Firebase init, Balance manager, shared card/
 // deck/hand-eval utilities, chip/bet-control UI helpers, the dark-shell
 // style + home-grid shell, the one-time disclaimer, and the games-tab card
-// injection. Every other module (blackjack, roulette, baccarat, poker,
-// casebattle) depends on window.SaltyCore existing before it runs, so this
-// file MUST be the first @require in the main script.
+// injection. Every other module (blackjack, roulette, baccarat, spanish21,
+// poker, casebattle) depends on window.SaltyCore existing before it runs,
+// so this file MUST be the first @require in the main script.
 //
 // Adding a new game: a module just needs to do
 //   window.SaltyCore.GAME_MODULES.mygame = { label: "My Game", icon: "🎲", mount(el) {...}, order: 6 };
@@ -78,8 +78,9 @@
   // every chip switches to a black base with colored stripes instead of a
   // solid color, so the high-roller tier reads as visually distinct at a
   // glance rather than "the same chip but bigger". The 1B chip is black
-  // with a teal/gold striped edge and a faint "7" watermark, matching the
-  // casino's own icon.
+  // with a teal/gold striped edge and a large "7" centered on its face,
+  // matching the casino's own icon (see chipStyle() below for how the
+  // denomination badge gets moved out of the way so the "7" stays visible).
   const CHIP_DENOMS = [
     10, 25, 100, 500, 1_000, 5_000, 25_000,
     100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000, 10_000_000,
@@ -125,20 +126,25 @@
     const c = chipColor(v);
     const stripe = chipStripeColor(v);
 
-    // The $1B chip gets its own look, matching the casino's icon exactly:
-    // a black base with alternating teal/green and gold stripes around the
-    // edge, plus a faint gold "7" watermark behind the chip. The actual
-    // denomination text ("1B") is drawn separately in the chip-face span
-    // that already sits on top of every chip (see renderBetControls()),
-    // so it still reads clearly over the watermark.
+    // The $1B chip gets its own look, matching the casino's icon: a black
+    // base, alternating teal/gold stripes around the edge, and a large
+    // bold "7" (gold fill, dark teal outline) dead center — the same
+    // treatment as the slot-reel "7" on the casino's launcher icon. The
+    // tray's normal opaque denomination badge (".chip-face", drawn by
+    // renderBetControls()) would otherwise sit right on top of this and
+    // hide it completely; ensureStyle() below adds a chip-specific CSS
+    // override (targeting `[data-chip="1000000000"] .chip-face`) that
+    // shrinks that badge down to a small corner marker instead, purely
+    // for this one denomination, so the "7" reads clearly as the chip's
+    // actual design instead of being covered by its own label.
     if (v >= 1_000_000_000) {
       const teal = "#14b8a6";
       const gold = stripe || "#d4af37";
-      const sevenSvg = `<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><text x='50' y='66' font-family='Oswald, Arial, sans-serif' font-weight='800' font-size='58' fill='${gold}' fill-opacity='0.4' text-anchor='middle'>7</text></svg>`;
+      const sevenSvg = `<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><text x='50' y='70' font-family='Oswald, Arial, sans-serif' font-weight='800' font-size='64' fill='${gold}' stroke='${teal}' stroke-width='3' paint-order='stroke' text-anchor='middle'>7</text></svg>`;
       return `
         background:
-          url("data:image/svg+xml,${encodeURIComponent(sevenSvg)}") center/68% no-repeat,
-          radial-gradient(circle at 32% 28%, rgba(255,255,255,.35), rgba(255,255,255,0) 42%),
+          url("data:image/svg+xml,${encodeURIComponent(sevenSvg)}") center/72% no-repeat,
+          radial-gradient(circle at 32% 28%, rgba(255,255,255,.3), rgba(255,255,255,0) 42%),
           repeating-conic-gradient(from 0deg, ${teal} 0deg 10deg, ${c} 10deg 20deg, ${gold} 20deg 30deg, ${c} 30deg 40deg),
           ${c};
         border-color:${gold};
@@ -273,7 +279,8 @@
   }
 
   // ---------------------------------------------------------------------
-  // 1. CARD / DECK / HAND-EVAL UTILITIES (shared by Blackjack, Baccarat, Poker)
+  // 1. CARD / DECK / HAND-EVAL UTILITIES (shared by Blackjack, Baccarat,
+  //    Spanish 21, Poker)
   // ---------------------------------------------------------------------
   const SUITS = ["s", "h", "d", "c"];
   const SUIT_GLYPH = { s: "♠", h: "♥", d: "♦", c: "♣" };
@@ -285,6 +292,13 @@
     return deck;
   }
 
+  // A Spanish deck is a standard 52-card deck with every numerical "10"
+  // removed (J/Q/K remain and still count as 10 in hand values) — 48
+  // cards per deck instead of 52. Used by Spanish 21.
+  function freshSpanishDeck() {
+    return freshDeck().filter((c) => c.r !== "10");
+  }
+
   function shuffle(deck) {
     for (let i = deck.length - 1; i > 0; i--) {
       const j = (Math.random() * (i + 1)) | 0;
@@ -293,16 +307,19 @@
     return deck;
   }
 
-  // A reshuffling multi-deck shoe, used by Blackjack and Baccarat.
+  // A reshuffling multi-deck shoe, used by Blackjack and Baccarat. Pass
+  // `deckFactory` (defaults to freshDeck) to build a shoe out of a
+  // different card set — e.g. freshSpanishDeck for Spanish 21.
   class Shoe {
-    constructor(numDecks, penetration = 0.25) {
+    constructor(numDecks, penetration = 0.25, deckFactory = freshDeck) {
       this.numDecks = numDecks;
       this.penetration = penetration; // reshuffle when this fraction remains
+      this.deckFactory = deckFactory;
       this._refill();
     }
     _refill() {
       let cards = [];
-      for (let i = 0; i < this.numDecks; i++) cards = cards.concat(freshDeck());
+      for (let i = 0; i < this.numDecks; i++) cards = cards.concat(this.deckFactory());
       this.cards = shuffle(cards);
       this.total = this.cards.length;
     }
@@ -329,7 +346,9 @@
     return c.s === "h" || c.s === "d" ? "red" : "black";
   }
 
-  // --- Blackjack value helpers ---
+  // --- Blackjack / Spanish 21 value helpers (shared — both are "ace 11/1,
+  //     faces worth 10" hand-value systems; Spanish 21 just uses a deck
+  //     with no numerical 10s, which freshSpanishDeck() handles) ---
   function bjCardValue(r) {
     if (r === "A") return 11;
     if (r === "J" || r === "Q" || r === "K") return 10;
@@ -698,6 +717,15 @@
         width:36px; height:36px; border-radius:50%; background:rgba(0,0,0,.28); border:1px dashed rgba(255,255,255,.5);
         display:flex; align-items:center; justify-content:center; pointer-events:none;
         font:800 11px/1 "JetBrains Mono",monospace; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.6);
+      }
+      /* The $1B chip's big centered "7" (drawn via chipStyle()'s background
+         image) would otherwise be hidden behind the normal opaque
+         denomination badge above — shrink that one badge down to a small
+         corner marker instead, only for this specific chip, so the "7"
+         actually reads as the chip's design. */
+      #${OVERLAY_ID} .chip-btn[data-chip="1000000000"] .chip-face{
+        position:absolute; bottom:2px; right:2px; width:20px; height:20px;
+        font-size:7px; background:rgba(0,0,0,.65); border-color:#d4af37;
       }
       /* --- bet spot: the felt circle chips get dragged onto --- */
       #${OVERLAY_ID} .bet-spot{
@@ -1131,6 +1159,7 @@
     SUIT_GLYPH,
     RANKS,
     freshDeck,
+    freshSpanishDeck,
     shuffle,
     Shoe,
     tagCard,

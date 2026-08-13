@@ -148,7 +148,7 @@
       </g>
     </svg>`;
     return `
-      background: url("data:image/svg+xml,${encodeURIComponent(svg)}") center/100% no-repeat;
+      background: url('data:image/svg+xml,${encodeURIComponent(svg)}') center/100% no-repeat;
       border-color:#d4af37;
     `;
   }

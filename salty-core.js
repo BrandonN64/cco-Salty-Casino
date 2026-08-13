@@ -78,7 +78,8 @@
   // every chip switches to a black base with colored stripes instead of a
   // solid color, so the high-roller tier reads as visually distinct at a
   // glance rather than "the same chip but bigger". The 1B chip is black
-  // and gold specifically.
+  // with a teal/gold striped edge and a faint "7" watermark, matching the
+  // casino's own icon.
   const CHIP_DENOMS = [
     10, 25, 100, 500, 1_000, 5_000, 25_000,
     100_000, 250_000, 500_000, 1_000_000, 2_500_000, 5_000_000, 10_000_000,
@@ -110,7 +111,7 @@
   // The stripe accent for the black-base tier (25M+) — null below that,
   // meaning "use the normal solid-color chip style" in chipStyle().
   function chipStripeColor(v) {
-    if (v >= 1_000_000_000) return "#d4af37"; // gold — the 1B chip
+    if (v >= 1_000_000_000) return "#d4af37"; // gold — the 1B chip (paired with teal in chipStyle())
     if (v >= 500_000_000) return "#7c3aed"; // purple
     if (v >= 250_000_000) return "#2fbf71"; // green
     if (v >= 100_000_000) return "#1d6fd6"; // blue
@@ -123,6 +124,27 @@
   function chipStyle(v) {
     const c = chipColor(v);
     const stripe = chipStripeColor(v);
+
+    // The $1B chip gets its own look, matching the casino's icon exactly:
+    // a black base with alternating teal/green and gold stripes around the
+    // edge, plus a faint gold "7" watermark behind the chip. The actual
+    // denomination text ("1B") is drawn separately in the chip-face span
+    // that already sits on top of every chip (see renderBetControls()),
+    // so it still reads clearly over the watermark.
+    if (v >= 1_000_000_000) {
+      const teal = "#14b8a6";
+      const gold = stripe || "#d4af37";
+      const sevenSvg = `<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><text x='50' y='66' font-family='Oswald, Arial, sans-serif' font-weight='800' font-size='58' fill='${gold}' fill-opacity='0.4' text-anchor='middle'>7</text></svg>`;
+      return `
+        background:
+          url("data:image/svg+xml,${encodeURIComponent(sevenSvg)}") center/68% no-repeat,
+          radial-gradient(circle at 32% 28%, rgba(255,255,255,.35), rgba(255,255,255,0) 42%),
+          repeating-conic-gradient(from 0deg, ${teal} 0deg 10deg, ${c} 10deg 20deg, ${gold} 20deg 30deg, ${c} 30deg 40deg),
+          ${c};
+        border-color:${gold};
+      `;
+    }
+
     if (stripe) {
       return `
         background:
@@ -192,7 +214,6 @@
   // since more than one can be on screen at once (e.g. live mode's main
   // bet and behind-bet panels).
   const chipScrollPositions = {};
-
   function wireBetControls(root, idPrefix, getBet, setBet) {
     const input = root.querySelector(`#${idPrefix}-bet-text`);
     if (input) {
@@ -740,7 +761,6 @@
       #saltys-disclaimer p{ margin:0 0 12px; color:#c7cdd6; font-size:13.5px; }
       #saltys-disclaimer .fine{ font-size:11.5px; color:#8a94a3; }
 
-      
       /* --- oval blackjack table (solo + live) --- */
       #${OVERLAY_ID} .ov-wrap{ position:relative; padding:32px 0 56px; }
       #${OVERLAY_ID} .ov-table{
@@ -929,7 +949,6 @@
             <button class="btn" id="saltys-casino-close">Close</button>
           </div>
         </div>
-
         <div id="saltys-tab-panel"></div>
       </div>
     `;
@@ -1018,13 +1037,7 @@
   // 7. Original games-tab card injection (unchanged behavior), now opens
   //    the tabbed shell instead of a static placeholder list.
   // ---------------------------------------------------------------------
-  const SLOT_ICON = `
-    <img
-      src="https://upload.wikimedia.org/wikipedia/commons/thumb/8/88/One-armed_bandit.svg/240px-One-armed_bandit.svg.png"
-      alt="Slot machine"
-      style="width:100%;height:100%;object-fit:contain"
-    >
-  `;
+  const SLOT_ICON = `<img src="https://raw.githubusercontent.com/BrandonN64/cco-Salty-Casino/39d4354e067ea8d066796a48d2aa582eb1376a86/Salty's%20Casino.png" alt="Salty's Casino" style="width:100%;height:100%;object-fit:contain">`;
 
   function injectGamesCard() {
     if (window.location.pathname !== "/games") return false;
@@ -1088,7 +1101,6 @@
   }
 
   // ---------------------------------------------------------------------
-  
 
   window.SaltyCore = {
     STARTING_BALANCE,

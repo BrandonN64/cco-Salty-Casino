@@ -14,14 +14,18 @@
 //     way — squeezing is purely the reveal, never a wait state — so
 //     nobody can get stuck on an unrevealed card.
 //   - Feeds the shared cross-game progressive jackpot (window.SaltyJackpot)
-//     with 0.05% of every wager placed here, and pays out of that same
-//     pool on baccarat's own rare "best hand" triggers.
+//     with 0.05% of every wager placed here (main bets AND side bets,
+//     including the jackpot bet itself). Collecting it, though, requires
+//     placing a separate flat "Jackpot" side bet each round — exactly
+//     like a real Caribbean Stud/Casino Hold'em progressive: everyone's
+//     play grows the pool, only players who bought a shot at it that
+//     round can win it.
 // ==/UserScript==
 (function () {
   "use strict";
 
   const {
-    MAX_BET, GAME_MODULES, OVERLAY_ID,
+    MIN_BET, MAX_BET, GAME_MODULES, OVERLAY_ID,
     Balance, Shoe, cardColor, SUIT_GLYPH, bacHandTotal,
     clamp, delay, fmt, chipColor, chipStyle, chipLabel, CHIP_DENOMS, toast,
   } = window.SaltyCore;
@@ -30,6 +34,13 @@
   const PENETRATION = 0.2;
   const BAC_DEAL_CARD_MS = 500;
   const BANKER_COMMISSION = 0.05;
+
+  // Flat, non-scaling qualifying bet for the progressive — real tables
+  // use a fixed amount (commonly "$1") rather than a percentage of your
+  // main wager, so it's cheap to opt into every round regardless of how
+  // big your Player/Banker bet is. Tied to MIN_BET so it scales sanely if
+  // the house ever changes table minimums.
+  const JACKPOT_SIDE_BET = MIN_BET * 5;
 
   const PAYOUTS = {
     player: 1,
@@ -109,7 +120,7 @@
         <text class="ov-banner-main"><textPath href="#ov-banner-arc-bac" startOffset="50%" text-anchor="middle">BACCARAT — TIE PAYS ${PAYOUTS.tie} TO 1</textPath></text>
       </svg>
       <div class="ov-banner-sub">Banker wins pay ${bankerPct} to 1 (${Math.round(BANKER_COMMISSION * 100)}% commission)</div>
-      <div class="ov-banner-sub2">Player/Banker bets push on a tie</div>
+      <div class="ov-banner-sub2">Jackpot side bet required to collect the progressive</div>
     `;
   }
 
@@ -172,7 +183,8 @@
           <p>Turn on "Deal face-down" and every card is dealt back-up — drag from its top-left corner to peel it open yourself, just like a real table's reveal. The round is already settled the instant it's dealt; squeezing only controls when you see it, so there's never anything to wait on.</p>
 
           <h3>Progressive jackpot</h3>
-          <p>0.05% of every wager placed here (and at the Blackjack tables) feeds one shared jackpot pool. It pays out on baccarat's rarest hands: a Perfect Pair dealt to <b>both</b> Player and Banker (Mega — the full pool), a natural 9-9 tie (Major — 25% of the pool), or a Perfect Pair on the hand that wins with a natural (Minor — 5% of the pool).</p>
+          <p>0.05% of every wager placed here (and at the Blackjack tables) feeds one shared jackpot pool, whether or not you bet on it. <b>Collecting it is a separate matter</b> — just like a real casino progressive (Caribbean Stud, Casino Hold'em, progressive Blackjack side bets), you must place the flat <b>Jackpot</b> bet (${fmt(JACKPOT_SIDE_BET)}) on a given round to be eligible to win it that round. Without it, hitting a jackpot-tier hand pays nothing extra — the same way missing a side bet you didn't place doesn't pay you.</p>
+          <p>With the Jackpot bet down, the pool pays out on baccarat's rarest hands: a Perfect Pair dealt to <b>both</b> Player and Banker (Mega — the full pool), a natural 9-9 tie (Major — 25% of the pool), or a Perfect Pair on the hand that wins with a natural (Minor — 5% of the pool). Like any other side bet, the Jackpot bet itself is lost on rounds where none of these hit.</p>
         </div>
         <div class="row" style="justify-content:flex-end;margin-top:16px">
           <button class="btn primary" id="saltys-bac-rules-close">Got it</button>
@@ -311,6 +323,18 @@
       #${OVERLAY_ID} .bac-side-pay{ font:600 9px/1 "JetBrains Mono",monospace; color:var(--text-dim); }
       #${OVERLAY_ID} .bac-side-amt{ font:700 11px/1.2 "JetBrains Mono",monospace; color:var(--gold-bright); }
 
+      /* --- the flat, non-scaling jackpot qualifying bet: a distinct spot
+             from the payout side bets above, since this one buys eligibility
+             rather than paying out on its own hand condition --- */
+      #${OVERLAY_ID} .bac-jackpot-spot{
+        position:relative; width:120px; height:78px; border-radius:14px; cursor:pointer;
+        background:radial-gradient(circle at 50% 35%, rgba(124,58,237,.25), #10261c 75%);
+        border:2px dashed var(--purple); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+        transition:box-shadow .15s ease, border-color .15s ease, transform .15s ease;
+      }
+      #${OVERLAY_ID} .bac-jackpot-spot.active{ border-style:solid; border-color:var(--purple-bright); transform:translateY(-2px); box-shadow:0 0 0 3px rgba(124,58,237,.4); }
+      #${OVERLAY_ID} .bac-jackpot-spot .bac-side-label{ color:var(--purple-bright); font-size:11px; }
+
       #${OVERLAY_ID} .bac-jackpot-banner{
         text-align:center; font:800 20px/1 "Oswald",sans-serif; letter-spacing:1px; color:var(--gold-bright);
         text-shadow:0 0 14px rgba(244,207,101,.5); margin-bottom:8px; transition:transform .15s ease;
@@ -342,6 +366,7 @@
       return {
         phase: "betting",
         bets: { player: 0, banker: 0, tie: 0, playerPair: 0, bankerPair: 0, perfectPair: 0, big: 0, small: 0 },
+        jackpotBet: false, // flat qualifying bet — boolean toggle, not chip-stacked
         activeBetTarget: "player",
         player: [], banker: [], playerTotal: 0, bankerTotal: 0,
         playerNatural: false, bankerNatural: false, winner: null,
@@ -350,7 +375,9 @@
       };
     }
 
-    function totalWager() { return Object.values(state.bets).reduce((a, b) => a + b, 0); }
+    function totalWager() {
+      return Object.values(state.bets).reduce((a, b) => a + b, 0) + (state.jackpotBet ? JACKPOT_SIDE_BET : 0);
+    }
 
     async function startDeal() {
       if (busy) return;
@@ -468,16 +495,35 @@
         else lines.push(["Small", -bets.small]);
       }
 
-      if (winnings > 0) await Balance.applyDelta(winnings, "solo_bac_settle");
-
-      let jackpotPayout = 0, jackpotTier = null;
+      // The jackpot side bet behaves like any other side bet: it's lost on
+      // rounds where the jackpot condition doesn't hit. When it hits AND
+      // the bet was down, the bet's own stake is returned alongside the
+      // jackpot payout below (rather than also being forfeited).
       const hit = checkJackpot(result);
-      if (hit && window.SaltyJackpot) {
-        jackpotPayout = await window.SaltyJackpot.award(hit.tier, "baccarat", hit.detail);
-        jackpotTier = hit.tier;
+      let jackpotPayout = 0, jackpotTier = null;
+      if (state.jackpotBet) {
+        if (hit && window.SaltyJackpot) {
+          jackpotPayout = await window.SaltyJackpot.award(hit.tier, "baccarat", hit.detail, true);
+          jackpotTier = hit.tier;
+          if (jackpotPayout > 0) {
+            winnings += JACKPOT_SIDE_BET; // return the qualifying stake itself
+            lines.push(["Jackpot bet", JACKPOT_SIDE_BET]);
+          } else {
+            lines.push(["Jackpot bet", -JACKPOT_SIDE_BET]);
+          }
+        } else {
+          lines.push(["Jackpot bet", -JACKPOT_SIDE_BET]);
+        }
+      } else if (hit) {
+        // Hit the condition with no qualifying bet down — exactly like
+        // missing any other side bet you didn't place: no payout, and
+        // nothing was risked on it either.
+        lines.push([`Jackpot hand (${hit.tier}) — no Jackpot bet placed`, 0]);
       }
 
-      const totalProfit = lines.reduce((a, [, p]) => a + p, 0) + jackpotPayout;
+      if (winnings > 0) await Balance.applyDelta(winnings, "solo_bac_settle");
+
+      const totalProfit = lines.reduce((a, [, p]) => a + p, 0);
       state.lastResult = { lines, totalProfit, jackpotPayout, jackpotTier };
     }
 
@@ -561,7 +607,7 @@
           <div class="ov-round-summary-headline">${headline} — ${state.winner.toUpperCase()}</div>
           <div class="ov-round-summary-lines">
             ${r.lines.map(([label, amt]) => line(label, amt)).join("")}
-            ${r.jackpotPayout > 0 ? line(`Jackpot (${r.jackpotTier})`, r.jackpotPayout) : ""}
+            ${r.jackpotPayout > 0 ? line(`Progressive Jackpot (${r.jackpotTier})`, r.jackpotPayout) : ""}
             <div class="ov-summary-line total"><span>Total</span><span>${r.totalProfit >= 0 ? "+" : ""}${fmt(r.totalProfit)}</span></div>
           </div>
         </div>`;
@@ -602,6 +648,13 @@
         ${sideSpotHtml("bankerPair", "Banker Pair", PAYOUTS.bankerPair)}
         ${sideSpotHtml("big", "Big", PAYOUTS.big)}
         ${sideSpotHtml("small", "Small", PAYOUTS.small)}
+      </div>
+      <div class="row center mt8">
+        <div class="bac-jackpot-spot ${state.jackpotBet ? "active" : ""}" id="bac-jackpot-toggle" title="Flat ${fmt(JACKPOT_SIDE_BET)} bet — required to collect the progressive jackpot this round">
+          <div class="bac-side-label">💰 Jackpot Bet</div>
+          <div class="bac-side-pay">${fmt(JACKPOT_SIDE_BET)} flat — required to win the pool</div>
+          ${state.jackpotBet ? `<div class="bac-side-amt">ON</div>` : `<div class="bac-side-amt" style="color:var(--text-dim)">OFF</div>`}
+        </div>
       </div>`;
     }
     function sideSpotHtml(key, label, payout) {
@@ -650,6 +703,13 @@
         wireSoundToggle(root, render);
         wireFaceDownToggle(root, render);
 
+        const jackpotToggle = root.querySelector("#bac-jackpot-toggle");
+        if (jackpotToggle) jackpotToggle.addEventListener("click", () => {
+          if (!state.jackpotBet && JACKPOT_SIDE_BET > Balance.current) { toast("Not enough balance for the jackpot bet."); return; }
+          state.jackpotBet = !state.jackpotBet;
+          render();
+        });
+
         root.querySelectorAll(".ov-bet-spot, .bac-side-spot").forEach((spot) => {
           spot.addEventListener("click", () => { state.activeBetTarget = spot.dataset.target; render(); });
           spot.addEventListener("dragover", (e) => { e.preventDefault(); spot.classList.add("drag-over"); });
@@ -687,6 +747,7 @@
         const clearBtn = root.querySelector("#bac-bet-clear");
         if (clearBtn) clearBtn.addEventListener("click", () => {
           Object.keys(state.bets).forEach((k) => (state.bets[k] = 0));
+          state.jackpotBet = false;
           render();
         });
         const dealBtn = root.querySelector("#bac-deal");
@@ -712,15 +773,17 @@
 
       if (state.phase === "settled") {
         root.querySelector("#bac-again").addEventListener("click", () => {
-          const bets = state.bets;
+          const bets = state.bets, jackpotBet = state.jackpotBet;
           state = freshState();
           state.bets = bets;
+          state.jackpotBet = jackpotBet;
           render();
         });
         root.querySelector("#bac-rebet").addEventListener("click", () => {
-          const bets = state.bets;
+          const bets = state.bets, jackpotBet = state.jackpotBet;
           state = freshState();
           state.bets = bets;
+          state.jackpotBet = jackpotBet;
           startDeal();
         });
       }

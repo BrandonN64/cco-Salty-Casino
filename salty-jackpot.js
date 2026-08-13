@@ -4,12 +4,12 @@
 // wants to feed or pay out the jackpot (blackjack, baccarat, ...).
 // Registers window.SaltyJackpot so every table can call the same two
 // functions: contribute(wagerAmount, gameId) on every bet placed, and
-// award(tierId, gameId, meta) when that table's own rules detect one of
-// its jackpot-worthy hands. The pool itself lives in one place — a single
-// Firestore doc — so a bet on the Blackjack table and a bet on the
-// Baccarat table are visibly feeding the exact same number, and a win on
-// either table pays out of (and visibly drains) that same number for
-// everyone watching, on both tables, in real time.
+// award(tierId, gameId, meta, qualified) when that table's own rules
+// detect one of its jackpot-worthy hands. The pool itself lives in one
+// place — a single Firestore doc — so a bet on the Blackjack table and a
+// bet on the Baccarat table are visibly feeding the exact same number,
+// and a win on either table pays out of (and visibly drains) that same
+// number for everyone watching, on both tables, in real time.
 // ==/UserScript==
 (function () {
   "use strict";
@@ -78,6 +78,12 @@
   // Called on every wager, from every table. Skims CONTRIBUTION_RATE into
   // the shared pool. Fire-and-forget from the caller's perspective — it
   // doesn't touch the player's own Balance, only the shared pool doc.
+  // Every wager funds the pool regardless of whether that player is
+  // eligible to WIN it — same as a real slot floor, where every machine on
+  // the linked network feeds the meter even though only max-bet players
+  // (or, at a table game, only players with the jackpot side bet down)
+  // can actually collect it. Eligibility is enforced separately in
+  // award(), below.
   async function contribute(wagerAmount, gameId) {
     const amt = Number(wagerAmount);
     if (!amt || amt <= 0) return;
@@ -103,13 +109,22 @@
   }
 
   // Called by a table when ITS OWN rules detect a jackpot-worthy hand.
-  // Pays `share` of the current pool straight into the winning player's
-  // Balance and drains the shared pool by that same amount (floored at
-  // SEED_AMOUNT so it reseeds instead of hitting zero). Returns the
-  // payout amount actually awarded.
-  async function award(tierId, gameId, meta) {
+  //
+  // `qualified` is REQUIRED and must be the caller's own check for whether
+  // this particular player placed that table's flat jackpot side bet this
+  // round — exactly like a real casino progressive (Caribbean Stud,
+  // Casino Hold'em, progressive Blackjack, etc.): the pool is funded by
+  // everyone's play, but only collectible by whoever paid for a shot at
+  // it that hand. The gate lives here, in the shared module, rather than
+  // being left to each game to remember, so a table can never accidentally
+  // pay out a jackpot to someone who didn't buy in for it.
+  //
+  // Returns the payout amount actually awarded (0 if `qualified` is falsy
+  // or the tier doesn't exist).
+  async function award(tierId, gameId, meta, qualified) {
     const tier = getTier(tierId);
     if (!tier) return 0;
+    if (!qualified) return 0;
     if (!isFirebaseConfigured()) {
       const pool = readLocal();
       const payout = +((pool.amount || SEED_AMOUNT) * tier.share).toFixed(2);

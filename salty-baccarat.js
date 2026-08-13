@@ -9,12 +9,16 @@
 //   - Standard Player / Banker / Tie betting circle (mutually exclusive —
 //     placing on one clears the other two, since only one of them can
 //     actually win a given round), plus a side-bet strip (Player Pair,
-//     Perfect Pair, Banker Pair, Big, Small).
-//   - Optional face-down dealing: drag a card open from its corner
-//     instead of it auto-flipping, same as a real table's squeeze
-//     reveal. Settlement happens the instant the round resolves either
-//     way — the drag reveal is purely cosmetic, never a wait state — so
-//     nobody can get stuck on an unrevealed card.
+//     Perfect Pair, Banker Pair, Big, Small, and the Jackpot qualifying
+//     bet, all in one row).
+//   - Optional face-down dealing that actually feels like a live table:
+//     one card is dealt face-down, YOU drag it open, THEN the next card
+//     is dealt — not all cards dumped on the table at once with squeezing
+//     as an afterthought. A "Reveal All" button skips the ritual and
+//     fast-forwards the rest of the round for anyone who just wants the
+//     result. The full round outcome is computed up front either way, so
+//     settlement never depends on reveal order or timing — squeezing is
+//     purely cosmetic pacing, never a real wait state.
 //   - Feeds the shared cross-game progressive jackpot (window.SaltyJackpot)
 //     with 0.05% of every wager placed here (main bets AND side bets,
 //     including the jackpot bet itself). Collecting it, though, requires
@@ -34,15 +38,18 @@
 
   const DECK_COUNT = 8;
   const PENETRATION = 0.2;
-  const BAC_DEAL_CARD_MS = 500;
+  const BAC_DEAL_CARD_MS = 500; // pacing when face-down/squeeze mode is OFF
+
   const BANKER_COMMISSION = 0.05;
 
-  // Flat, non-scaling qualifying bet for the progressive — real tables
-  // use a fixed amount (commonly "$1") rather than a percentage of your
-  // main wager, so it's cheap to opt into every round regardless of how
-  // big your Player/Banker bet is. Tied to MIN_BET so it scales sanely if
-  // the house ever changes table minimums.
-  const JACKPOT_SIDE_BET = MIN_BET * 5;
+  // Flat, non-scaling qualifying bet for the progressive. Real tables use
+  // a fixed amount rather than a percentage of your main wager, so it's
+  // cheap to opt into every round regardless of bet size — but it still
+  // has to feel like something. With chip denominations running up to
+  // 1B and a typical wager around 10M, MIN_BET*5 (50) was invisible.
+  // 250,000 lines up with one of the actual chip denominations (the pink
+  // chip) so the flat stake reads as "a real chip," not a rounding error.
+  const JACKPOT_SIDE_BET = 250_000;
 
   // The three main outcomes are mutually exclusive in this UI — only one
   // of Player/Banker/Tie can actually happen each round, so placing chips
@@ -91,10 +98,6 @@
     return null;
   }
 
-  // The jackpot pool grows in tiny fractions of a token per round (0.05%
-  // of the wager), so rounding it to a whole number for display would
-  // make it look completely static for dozens of rounds. Two decimals
-  // makes the growth actually visible round to round.
   function fmtJackpot(n) {
     return (n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
@@ -196,11 +199,11 @@
           <p><b>Big</b> — pays ${PAYOUTS.big}:1 if the round deals 5 or 6 cards total (and isn't a tie). <b>Small</b> — pays ${PAYOUTS.small}:1 if the round deals exactly 4 cards total.</p>
 
           <h3>Face-down dealing</h3>
-          <p>Turn on "Face-Down" and every card is dealt back-up — drag from its top-left corner to peel it open yourself, just like a real table's reveal. The round is already settled the instant it's dealt; revealing a card only controls when you see it, so there's never anything to wait on.</p>
+          <p>Turn on "Face-Down" and cards come out one at a time, back-up — drag from a card's top-left corner to peel it open before the next one is dealt, just like a real table's squeeze. The whole round's outcome is already decided the instant Deal is pressed; revealing a card only controls when you personally see it, so there's never a real wait — and "Reveal All" fast-forwards through the rest of the ritual any time you want.</p>
 
           <h3>Progressive jackpot</h3>
           <p>0.05% of every wager placed here (and at the Blackjack tables) feeds one shared jackpot pool, whether or not you bet on it. <b>Collecting it is a separate matter</b> — just like a real casino progressive (Caribbean Stud, Casino Hold'em, progressive Blackjack side bets), you must place the flat <b>Jackpot</b> bet (${fmt(JACKPOT_SIDE_BET)}) on a given round to be eligible to win it that round. Without it, hitting a jackpot-tier hand pays nothing extra — the same way missing a side bet you didn't place doesn't pay you.</p>
-          <p>With the Jackpot bet down, the pool pays out on baccarat's rarest hands: a Perfect Pair dealt to <b>both</b> Player and Banker (Mega — the full pool), a natural 9-9 tie (Major — 25% of the pool), or a Perfect Pair on the hand that wins with a natural (Minor — 5% of the pool). Like any other side bet, the Jackpot bet itself is lost on rounds where none of these hit. The pool grows slowly by design (a fraction of a token per round on typical bets) — the display shows two decimal places so that growth is actually visible.</p>
+          <p>With the Jackpot bet down, the pool pays out on baccarat's rarest hands: a Perfect Pair dealt to <b>both</b> Player and Banker (Mega — the full pool), a natural 9-9 tie (Major — 25% of the pool), or a Perfect Pair on the hand that wins with a natural (Minor — 5% of the pool). Like any other side bet, the Jackpot bet itself is lost on rounds where none of these hit.</p>
         </div>
         <div class="row" style="justify-content:flex-end;margin-top:16px">
           <button class="btn primary" id="saltys-bac-rules-close">Got it</button>
@@ -272,8 +275,6 @@
     if (btn) btn.addEventListener("click", () => { setSoundEnabled(!soundEnabled()); renderFn(); });
   }
 
-  // Renamed from "Squeeze" to "Face-Down" per feedback — the underlying
-  // localStorage key and drag mechanic are unchanged, just the label.
   const LS_FACEDOWN_ENABLED = "saltys_bac_facedown_enabled";
   function faceDownEnabled() { return localStorage.getItem(LS_FACEDOWN_ENABLED) === "1"; }
   function setFaceDownEnabled(on) { localStorage.setItem(LS_FACEDOWN_ENABLED, on ? "1" : "0"); }
@@ -313,15 +314,7 @@
       #${OVERLAY_ID} .bac-win-badge.lose{ color:var(--danger); }
       #${OVERLAY_ID} .bac-win-badge.push{ color:var(--text-dim); }
 
-      /* --- corner-drag face-down reveal: a face-down card with a
-             grabbable corner. The BACK face must render at its natural
-             (unrotated) orientation so it's visible while the card sits
-             face-down — only the FRONT face carries the 180deg offset, so
-             it's the one hidden until the drag flips the inner container.
-             (Both faces previously had the 180deg offset, which is why
-             squeeze-mode cards rendered as invisible — every face was
-             showing its backface, which backface-visibility:hidden hides
-             entirely, both at rest and after a reveal.) --- */
+      /* --- corner-drag face-down reveal --- */
       #${OVERLAY_ID} .bac-squeeze-wrap{ width:68px; height:96px; perspective:700px; touch-action:none; }
       #${OVERLAY_ID} .bac-squeeze-inner{ position:relative; width:100%; height:100%; transform-style:preserve-3d; transition:transform .3s cubic-bezier(.2,.8,.2,1); }
       #${OVERLAY_ID} .bac-squeeze-face{ position:absolute; inset:0; border-radius:9px; backface-visibility:hidden; box-shadow:0 3px 8px rgba(0,0,0,.4); }
@@ -350,14 +343,19 @@
       #${OVERLAY_ID} .bac-side-pay{ font:600 9px/1 "JetBrains Mono",monospace; color:var(--text-dim); }
       #${OVERLAY_ID} .bac-side-amt{ font:700 11px/1.2 "JetBrains Mono",monospace; color:var(--gold-bright); }
 
+      /* --- jackpot qualifying bet: lives inside the same side-bet strip
+             now (rather than a separate row below it) so the whole betting
+             area reads as one cohesive block; purple accent keeps it
+             visually distinct from the payout side bets next to it since
+             it buys eligibility rather than paying on its own condition --- */
       #${OVERLAY_ID} .bac-jackpot-spot{
-        position:relative; width:120px; height:78px; border-radius:14px; cursor:pointer;
-        background:radial-gradient(circle at 50% 35%, rgba(124,58,237,.25), #10261c 75%);
+        position:relative; width:110px; height:74px; border-radius:12px; cursor:pointer;
+        background:radial-gradient(circle at 50% 35%, rgba(124,58,237,.28), #10261c 75%);
         border:2px dashed var(--purple); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
         transition:box-shadow .15s ease, border-color .15s ease, transform .15s ease;
       }
       #${OVERLAY_ID} .bac-jackpot-spot.active{ border-style:solid; border-color:var(--purple-bright); transform:translateY(-2px); box-shadow:0 0 0 3px rgba(124,58,237,.4); }
-      #${OVERLAY_ID} .bac-jackpot-spot .bac-side-label{ color:var(--purple-bright); font-size:11px; }
+      #${OVERLAY_ID} .bac-jackpot-spot .bac-side-label{ color:var(--purple-bright); }
 
       #${OVERLAY_ID} .bac-jackpot-banner{
         text-align:center; font:800 20px/1 "Oswald",sans-serif; letter-spacing:1px; color:var(--gold-bright);
@@ -384,7 +382,10 @@
 
   const BaccaratSolo = (function () {
     let root = null, shoe = null, state = null, busy = false, jackpotUnsub = null, jackpotAmount = 0;
+    let chipScrollPos = 0; // survives the innerHTML rebuild that would otherwise reset it to 0 on every bet
+    let skipSqueeze = false; // set by "Reveal All" mid-round to fast-forward remaining cards
     const dealtAnimated = new Set();
+    const revealWaiters = new Map(); // card._key -> resolve fn, only populated while a live-style deal is blocked on that card
 
     function freshState() {
       return {
@@ -403,14 +404,12 @@
       return Object.values(state.bets).reduce((a, b) => a + b, 0) + (state.jackpotBet ? JACKPOT_SIDE_BET : 0);
     }
 
-    // Player/Banker/Tie are mutually exclusive: only one of the three can
-    // actually win a round, so building up chips on more than one doesn't
-    // represent a real strategy the way stacking multiple side bets does.
-    // Clearing the others is safe here — nothing is debited from Balance
-    // until Deal, so this is just discarding a pending (uncommitted)
-    // number, not refunding real money.
     function clearOtherMainBets(keptKey) {
       MAIN_BET_KEYS.forEach((k) => { if (k !== keptKey) state.bets[k] = 0; });
+    }
+
+    function waitForReveal(cardKey) {
+      return new Promise((resolve) => { revealWaiters.set(cardKey, resolve); });
     }
 
     async function startDeal() {
@@ -426,18 +425,32 @@
 
       if (!shoe) shoe = new Shoe(DECK_COUNT, PENETRATION);
       dealtAnimated.clear();
+      revealWaiters.clear();
+      skipSqueeze = false;
       state.player = []; state.banker = [];
       state.revealedKeys = new Set();
-      state.phase = "dealing";
       state.lastResult = null;
+
+      const liveStyle = faceDownEnabled();
+      state.phase = liveStyle ? "revealing" : "dealing";
       render();
 
+      // Dealing pace: normal mode just animates in with a short delay
+      // between cards, same as before. Live/face-down mode deals exactly
+      // one card, waits for YOU to drag it open, then deals the next —
+      // the whole point of turning the setting on — unless "Reveal All"
+      // has been clicked, at which point skipSqueeze fast-forwards
+      // everything still left in this round.
       const draw = async (hand) => {
         const card = shoe.draw();
         state[hand].push(card);
         render();
         playDealSound();
-        await delay(BAC_DEAL_CARD_MS);
+        if (liveStyle && !skipSqueeze) {
+          await waitForReveal(card._key);
+        } else {
+          await delay(BAC_DEAL_CARD_MS);
+        }
         return card;
       };
 
@@ -473,13 +486,11 @@
 
       await settle();
 
-      if (!faceDownEnabled()) {
+      if (!liveStyle) {
         state.player.forEach((c) => state.revealedKeys.add(c._key));
         state.banker.forEach((c) => state.revealedKeys.add(c._key));
-        state.phase = "settled";
-      } else {
-        state.phase = "revealing";
       }
+      state.phase = "settled";
       busy = false;
       render();
     }
@@ -577,7 +588,7 @@
 
     function wireSqueezeCorners(root) {
       root.querySelectorAll(".bac-squeeze-corner").forEach((corner) => {
-        const key = corner.dataset.squeezeKey;
+        const key = Number(corner.dataset.squeezeKey);
         const wrap = corner.closest(".bac-squeeze-wrap");
         const inner = wrap.querySelector(".bac-squeeze-inner");
         let dragging = false, startX = 0;
@@ -587,8 +598,9 @@
           inner.style.transition = "";
           inner.style.transform = open ? "rotateY(180deg)" : "rotateY(0deg)";
           if (open) {
-            state.revealedKeys.add(Number(key));
-            checkAllRevealed();
+            state.revealedKeys.add(key);
+            const waiter = revealWaiters.get(key);
+            if (waiter) { revealWaiters.delete(key); waiter(); }
             render();
           }
         };
@@ -609,18 +621,20 @@
         corner.addEventListener("dblclick", () => commit(true));
       });
     }
-    function checkAllRevealed() {
-      const allCards = [...state.player, ...state.banker];
-      if (allCards.every((c) => state.revealedKeys.has(c._key))) state.phase = "settled";
-    }
+
+    // Reveals everything dealt so far immediately, and fast-forwards any
+    // cards still left to come this round (third-card draws, etc.) rather
+    // than making you squeeze the rest one by one.
     function revealAll() {
+      skipSqueeze = true;
       [...state.player, ...state.banker].forEach((c) => state.revealedKeys.add(c._key));
-      state.phase = "settled";
+      revealWaiters.forEach((resolve) => resolve());
+      revealWaiters.clear();
       render();
     }
 
     function renderTable() {
-      const faceDown = state.phase === "revealing" || state.phase === "dealing" ? faceDownEnabled() : false;
+      const faceDown = (state.phase === "revealing" || state.phase === "dealing") ? faceDownEnabled() : false;
       const showTotals = state.phase === "settled" || !faceDownEnabled();
       const playerLabel = showTotals ? `${state.playerTotal}${state.playerNatural ? " ★" : ""}` : "?";
       const bankerLabel = showTotals ? `${state.bankerTotal}${state.bankerNatural ? " ★" : ""}` : "?";
@@ -675,13 +689,7 @@
         ${sideSpotHtml("bankerPair", "Banker Pair", PAYOUTS.bankerPair)}
         ${sideSpotHtml("big", "Big", PAYOUTS.big)}
         ${sideSpotHtml("small", "Small", PAYOUTS.small)}
-      </div>
-      <div class="row center mt8">
-        <div class="bac-jackpot-spot ${state.jackpotBet ? "active" : ""}" id="bac-jackpot-toggle" title="Flat ${fmt(JACKPOT_SIDE_BET)} bet — required to collect the progressive jackpot this round">
-          <div class="bac-side-label">💰 Jackpot Bet</div>
-          <div class="bac-side-pay">${fmt(JACKPOT_SIDE_BET)} flat — required to win the pool</div>
-          ${state.jackpotBet ? `<div class="bac-side-amt">ON</div>` : `<div class="bac-side-amt" style="color:var(--text-dim)">OFF</div>`}
-        </div>
+        ${jackpotSpotHtml()}
       </div>`;
     }
     function sideSpotHtml(key, label, payout) {
@@ -691,6 +699,13 @@
         <div class="bac-side-label">${label}</div>
         <div class="bac-side-pay">${payout}:1</div>
         ${amt > 0 ? `<div class="bac-side-amt">${fmt(amt)}</div>` : ""}
+      </div>`;
+    }
+    function jackpotSpotHtml() {
+      return `<div class="bac-jackpot-spot ${state.jackpotBet ? "active" : ""}" id="bac-jackpot-toggle" title="Flat ${fmt(JACKPOT_SIDE_BET)} bet — required to collect the progressive jackpot this round">
+        <div class="bac-side-label">💰 Jackpot</div>
+        <div class="bac-side-pay">${fmt(JACKPOT_SIDE_BET)} flat</div>
+        ${state.jackpotBet ? `<div class="bac-side-amt">ON</div>` : `<div class="bac-side-amt" style="color:var(--text-dim)">OFF</div>`}
       </div>`;
     }
 
@@ -771,6 +786,21 @@
             setTimeout(() => ghost.remove(), 0);
           });
         });
+        // Chip trays are rebuilt from scratch (root.innerHTML = ...) on
+        // every bet change, which resets a fresh element's scrollLeft to
+        // 0 — losing your place in the tray every single click. Restore
+        // it from the module-level variable, same fix salty-core.js's
+        // wireBetControls() applies for Blackjack's bet controls.
+        const chipSelect = root.querySelector(".chip-select");
+        if (chipSelect) {
+          chipSelect.scrollLeft = chipScrollPos;
+          chipSelect.addEventListener("wheel", (e) => {
+            if (chipSelect.scrollWidth <= chipSelect.clientWidth) return;
+            e.preventDefault();
+            chipSelect.scrollLeft += e.deltaY;
+          }, { passive: false });
+          chipSelect.addEventListener("scroll", () => { chipScrollPos = chipSelect.scrollLeft; });
+        }
         const maxBtn = root.querySelector("#bac-bet-max");
         if (maxBtn) maxBtn.addEventListener("click", () => {
           const t = state.activeBetTarget;
@@ -793,7 +823,7 @@
       if (state.phase === "settled") {
         controls = `<div class="row center"><button class="btn primary" id="bac-rebet">Rebet ${fmt(totalWager())}</button><button class="btn" id="bac-again">Change Bet</button></div>`;
       } else {
-        controls = `<div class="center muted">${state.phase === "dealing" ? "Dealing…" : "Reveal the cards when you're ready…"}</div>`;
+        controls = `<div class="center muted">${state.phase === "dealing" ? "Dealing…" : "Squeeze the card to reveal it…"}</div>`;
       }
 
       root.innerHTML = jackpotBanner + rulesButtonRowHtml() + renderTable() + `<div class="mt16">${controls}</div>`;

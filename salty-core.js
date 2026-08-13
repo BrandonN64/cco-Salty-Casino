@@ -127,6 +127,8 @@
   const stripe = chipStripeColor(v);
 
   if (v >= 1_000_000_000) {
+    const teal = "#14b8a6";
+    const gold = "#d4af37";
     const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
       <defs>
         <radialGradient id='bg' cx='35%' cy='30%' r='75%'>
@@ -136,10 +138,10 @@
         </radialGradient>
       </defs>
       <circle cx='50' cy='50' r='48' fill='url(#bg)'/>
-      <circle cx='50' cy='50' r='47' fill='none' stroke='#14b8a6' stroke-width='2'/>
-      <circle cx='50' cy='50' r='41' fill='none' stroke='#d4af37' stroke-width='3.5' stroke-dasharray='7 5'/>
-      <text x='50' y='67' font-family='Georgia, "Times New Roman", serif' font-weight='700' font-size='56' text-anchor='middle' fill='#08110d' opacity='0.55'>7</text>
-      <text x='49' y='65' font-family='Georgia, "Times New Roman", serif' font-weight='700' font-size='56' text-anchor='middle' fill='#f4cf65'>7</text>
+      <circle cx='50' cy='50' r='47' fill='none' stroke='${teal}' stroke-width='2'/>
+      <circle cx='50' cy='50' r='41' fill='none' stroke='${gold}' stroke-width='3.5' stroke-dasharray='7 5'/>
+      <text x='50' y='67' font-family='Georgia, Times New Roman, serif' font-weight='700' font-size='56' text-anchor='middle' fill='#08110d' opacity='0.55'>7</text>
+      <text x='49' y='65' font-family='Georgia, Times New Roman, serif' font-weight='700' font-size='56' text-anchor='middle' fill='#f4cf65'>7</text>
       <g fill='#e8c76a'>
         <path d='M23,19 l2.1,5.1 l5.1,2.1 l-5.1,2.1 l-2.1,5.1 l-2.1,-5.1 l-5.1,-2.1 l5.1,-2.1 z'/>
         <path d='M79,23 l1.6,4 l4,1.6 l-4,1.6 l-1.6,4 l-1.6,-4 l-4,-1.6 l4,-1.6 z'/>
@@ -147,9 +149,14 @@
         <path d='M22,80 l1.8,4.4 l4.4,1.8 l-4.4,1.8 l-1.8,4.4 l-1.8,-4.4 l-4.4,-1.8 l4.4,-1.8 z'/>
       </g>
     </svg>`;
+    // The .replace(/'/g, "%27") is the actual fix — without it, the raw
+    // single quotes surviving encodeURIComponent() break the outer
+    // url('...') wrapper the moment the CSS parser hits the SVG's own
+    // xmlns='...' attribute.
+    const encoded = encodeURIComponent(svg).replace(/'/g, "%27");
     return `
-      background: url('data:image/svg+xml,${encodeURIComponent(svg)}') center/100% no-repeat;
-      border-color:#d4af37;
+      background: url('data:image/svg+xml,${encoded}') center/100% no-repeat;
+      border-color:${gold};
     `;
   }
 

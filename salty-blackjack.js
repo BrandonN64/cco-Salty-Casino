@@ -45,7 +45,7 @@
   // Flat, non-scaling qualifying bet for the shared progressive jackpot —
   // matches Baccarat's convention exactly. Placed per hand, since each seat
   // here is its own independent hand with its own bet/side-bets already.
-  const JACKPOT_SIDE_BET = MIN_BET * 5;
+  const JACKPOT_SIDE_BET = 250_000;
   // Suited three-of-a-kind (~1-in-4,800 hands) is far rarer than a suited
   // natural blackjack (~1-in-84) — rare enough to earn the bigger tier.
   const JACKPOT_TIER = "major";

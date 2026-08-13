@@ -646,6 +646,7 @@
       if (total > Balance.current) { toast("Not enough balance for that many seats at this bet."); return; }
       busy = true; render();
       try { await Balance.applyDelta(-total, "solo_bj_deal_multi"); }
+        if (window.SaltyJackpot) window.SaltyJackpot.contribute(total, "blackjack");
       catch (e) { toast("Bet failed."); busy = false; render(); return; }
       if (!shoe) shoe = new Shoe(6, 0.25);
       dealtAnimated.clear();
@@ -1224,6 +1225,7 @@
           tx.set(tref(), t);
         });
         await Balance.applyDelta(-totalDebit, "live_bj_bet");
+        if (window.SaltyJackpot) window.SaltyJackpot.contribute(totalDebit, "blackjack");
       } catch (e) { toast("Bet failed: " + e.message); }
     }
 
@@ -1241,6 +1243,7 @@
           tx.set(tref(), t);
         });
         await Balance.applyDelta(-amount, "live_bj_behind");
+        if (window.SaltyJackpot) window.SaltyJackpot.contribute(amount, "blackjack");
         toast(`Bet placed behind seat ${seatIdx + 1}.`);
       } catch (e) { toast("Behind bet failed: " + e.message); }
     }

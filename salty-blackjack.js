@@ -1,47 +1,38 @@
 // ==UserScript==
-// Salty's Casino — BLACKJACK MODULE
-// Loaded via @require, after salty-core.js, by the main salty-casino.user.js
-// loader. Registers itself into window.SaltyCore.GAME_MODULES.blackjack so
-// it shows up automatically on the home grid.
+// Salty's Casino — BLACKJACK MODULE (Solo)
+// Loaded via @require, after salty-core.js and salty-jackpot.js, by the
+// main salty-casino.user.js loader. Registers itself into
+// window.SaltyCore.GAME_MODULES.blackjack so it shows up automatically on
+// the home grid.
 //
-// Two ways to play:
-//   - Solo: up to 5 hands at once vs. one dealer, no waiting on anyone.
-//   - Live Tables: three stakes tiers (Low / Mid / High Roller), each its
-//     own real-time Firestore table with 5 seats, synced betting/turn
-//     timers, side bets, bet-behind, and kick-after-2-missed-bets.
+// Solo play only for now: up to 5 hands at once vs. one dealer, no waiting
+// on anyone. Live Tables have been removed for the time being — get solo
+// fully working first, add live back later.
+//
+// Feeds the shared cross-game progressive jackpot (window.SaltyJackpot)
+// with 0.05% of every wager placed here, and pays out of that same pool on
+// a suited three-of-a-kind (your two cards + the dealer's up card, all
+// matching rank AND suit — the same "suitedTrips" condition the 21+3 side
+// bet already pays its top rate on) — but only for hands that placed the
+// flat "Jackpot" side bet that round, same convention as Baccarat and
+// every real casino progressive (Caribbean Stud, Casino Hold'em,
+// progressive Blackjack side bets like Blazing 7s): the pool grows from
+// everyone's play, only collectible by whoever bought a shot at it that
+// hand.
+//
+// A suited NATURAL BLACKJACK was the first draft of this trigger, but at
+// ~1 in 84 hands it's far too common for a jackpot (that's ordinary
+// side-bet rarity, not jackpot rarity) — a suited three-of-a-kind is
+// roughly 1 in 4,800 hands, which actually earns the name.
 // ==/UserScript==
 (function () {
   "use strict";
 
   const {
-    MIN_BET, MAX_BET, GAME_MODULES, OVERLAY_ID, LS_HANDLE,
+    MIN_BET, MAX_BET, GAME_MODULES, OVERLAY_ID,
     Balance, Shoe, bjHandValue, isBlackjack, isSplittablePair, cardColor, RANK_ORDER, SUIT_GLYPH,
-    clamp, delay, fmt, parseAmount, chipColor, chipStyle, chipLabel, CHIP_DENOMS, renderBetControls, wireBetControls, toast,
-    getDb, getAuthReady, getUid, isFirebaseConfigured,
+    clamp, delay, fmt, chipColor, chipStyle, chipLabel, CHIP_DENOMS, toast,
   } = window.SaltyCore;
-
-  // -----------------------------------------------------------------------
-  // Stakes tiers. Each is its own Firestore table doc (same schema,
-  // different id/limits). Add a fourth tier by adding one more entry here.
-  // -----------------------------------------------------------------------
-  const LIVE_BJ_TIERS = [
-    { key: "low", tableId: "table-low", label: "Low Roller", minBet: MIN_BET, maxBet: 100_000 },
-    { key: "mid", tableId: "table-mid", label: "Mid Roller", minBet: 100_000, maxBet: 10_000_000 },
-    { key: "high", tableId: "table-high", label: "High Roller", minBet: 10_000_000, maxBet: MAX_BET },
-  ];
-  const LIVE_BJ_TABLE_IDS = LIVE_BJ_TIERS.map((t) => t.tableId);
-  function tierForTable(tableId) { return LIVE_BJ_TIERS.find((t) => t.tableId === tableId) || LIVE_BJ_TIERS[0]; }
-  function myUid() { return getUid(); }
-
-  const LIVE_BJ_SEATS = 5;
-  const LIVE_BJ_MAX_ACTIVE = 2;
-  const LIVE_BJ_DEAL_CARD_MS = 550;
-  const LIVE_BJ_MAX_SPLITS = 3; // up to 4 hands per seat
-  const LIVE_BJ_BETTING_MS = 25000;
-  const LIVE_BJ_TURN_MS = 25000;
-  const LIVE_BJ_KICK_AFTER_MISSES = 2;
-  const LIVE_BJ_DEAL_TIMEOUT_MS = 15000;
-  const LIVE_BJ_INSURANCE_MS = 10000;
 
   const SIDE_BET_PAYTABLES = {
     perfectPairs: { mixed: 5, colored: 12, perfect: 25 },
@@ -49,18 +40,16 @@
   };
   const DEALER_STANDS_SOFT_17 = true;
   const SURRENDER_RETURN_FRACTION = 0.5; // late surrender: forfeit half the bet, hand ends immediately
-  const SOLO_MAX_HANDS_PER_SEAT = 4; // original hand + up to 3 splits, same cap as live's LIVE_BJ_MAX_SPLITS
+  const SOLO_MAX_HANDS_PER_SEAT = 4; // original hand + up to 3 splits
 
-  // A small fan of casino chips representing a locked-in bet, sized by
-  // magnitude (more chips for a bigger bet) and colored via chipColor()
-  // (core.js) — the same scale the pickable chip tray uses, so a chip is
-  // the same color in your tray and sitting on the felt. Fanned
-  // horizontally rather than stacked vertically — a vertical stack built
-  // from negative top-margins can creep upward with no fixed ceiling and
-  // end up overlapping whatever sits above it (the cards); a horizontal
-  // fan only ever grows sideways in its own row, so it can't intrude on
-  // the hand above it. Shared by solo and live so a bet looks the same
-  // whichever mode you're in.
+  // Flat, non-scaling qualifying bet for the shared progressive jackpot —
+  // matches Baccarat's convention exactly. Placed per hand, since each seat
+  // here is its own independent hand with its own bet/side-bets already.
+  const JACKPOT_SIDE_BET = MIN_BET * 5;
+  // Suited three-of-a-kind (~1-in-4,800 hands) is far rarer than a suited
+  // natural blackjack (~1-in-84) — rare enough to earn the bigger tier.
+  const JACKPOT_TIER = "major";
+
   function chipStackHtml(amount, opts = {}) {
     if (!amount || amount <= 0) return "";
     const size = opts.size || 24;
@@ -75,12 +64,6 @@
     return `<div class="chip-stack-wrap"><div class="chip-stack-discs">${discs}</div>${opts.hideLabel ? "" : `<div class="chip-stack-label">${fmt(amount)}</div>`}</div>`;
   }
 
-  // A real betting circle sitting directly on the felt — main bet or a
-  // side bet — showing an actual chip pile (colored via the same
-  // chipStyle() the tray uses) instead of a number in a box off to the
-  // side. `key` identifies it as a click-to-target and drag-drop
-  // destination; `active` highlights whichever spot chip clicks currently
-  // go to.
   function betSpotHtml(key, amount, active, label, small) {
     const size = small ? 62 : 92;
     const chipSize = small ? 15 : 22;
@@ -96,14 +79,17 @@
     </div>`;
   }
 
-  // The curved felt rules text every real table has printed on it — a
-  // gentle arc over the dealer's spot plus the two rule lines beneath.
-  // Purely decorative/informational (no click targets), and the actual
-  // numbers here are pulled from real constants so they can't drift out of
-  // sync with the real payouts/rules if those ever change.
+  function jackpotSpotHtml(active) {
+    return `<div class="sbj-jackpot-spot ${active ? "active" : ""}" id="sbj-jackpot-toggle" title="Flat ${fmt(JACKPOT_SIDE_BET)} bet per hand — required to collect the progressive jackpot this round">
+      <div class="ov-bet-spot-label">💰 Jackpot</div>
+      <div class="sbj-jackpot-sub">${fmt(JACKPOT_SIDE_BET)} flat / hand</div>
+      ${active ? `<div class="ov-bet-spot-amt">ON</div>` : `<div class="ov-bet-spot-amt" style="color:var(--text-dim)">OFF</div>`}
+    </div>`;
+  }
+
   function tableBannerHtml() {
-    const insurancePayoutRatio = "2 TO 1"; // seat.insuranceBet * 3 returned = stake + 2x profit
-    const blackjackPayoutRatio = "3 TO 2"; // hand.bet * 2.5 returned = stake + 1.5x profit
+    const insurancePayoutRatio = "2 TO 1";
+    const blackjackPayoutRatio = "3 TO 2";
     return `
       <svg class="ov-banner" viewBox="0 0 440 60" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         <path id="ov-banner-arc" d="M 15,52 Q 220,8 425,52" fill="none"/>
@@ -114,9 +100,6 @@
     `;
   }
 
-  // The shoe (stack of face-down cards) and discard tray in the corners —
-  // purely atmospheric, reusing the existing card-back pattern so it
-  // matches the actual cards on the table.
   function shoeDecorHtml() {
     return `
       <div class="ov-corner-deco ov-corner-left" aria-hidden="true">
@@ -130,10 +113,6 @@
     `;
   }
 
-  // A small "Rules" button, meant to sit right above the table in both
-  // modes. Rendered fresh every time (same as everything else here), so
-  // callers need to re-wire its click handler after each render — same
-  // pattern as every other button in this file.
   function rulesButtonRowHtml() {
     return `<div class="row" style="justify-content:flex-end;gap:6px;margin-bottom:6px">${soundToggleHtml()}<button class="btn small" id="saltys-bj-rules-btn">📖 House Rules</button></div>`;
   }
@@ -142,10 +121,6 @@
     if (btn) btn.addEventListener("click", showRulesModal);
   }
 
-  // The rules explainer. Wording is generated from the real constants
-  // (DEALER_STANDS_SOFT_17, SURRENDER_RETURN_FRACTION, SIDE_BET_PAYTABLES)
-  // instead of being hand-typed, so if those ever change the printed rules
-  // can't quietly fall out of sync with what the game actually does.
   function showRulesModal() {
     if (document.getElementById("saltys-bj-rules")) return;
     const el = document.createElement("div");
@@ -185,7 +160,10 @@
           <h3>Side bets</h3>
           <p>Placed before the deal, alongside your main bet:</p>
           <p><b>Perfect Pairs</b> — pays out if your first two cards are a pair (same rank), scaling up for a same-color pair or an exact suited match.</p>
-          <p><b>21+3</b> — pays out if your two cards plus the dealer's face-up card form a poker hand: a flush, straight, three of a kind, straight flush, or suited trips.</p>
+          <p><b>21+3</b> — pays out if your two cards plus the dealer's face-up card form a poker hand: a flush, straight, three of a kind, straight flush, or suited trips — suited trips (three matching cards, same rank AND suit) is the rarest and pays the most.</p>
+
+          <h3>Progressive jackpot</h3>
+          <p>0.05% of every wager placed here (and at Baccarat) feeds one shared jackpot pool, whether or not you bet on it. <b>Collecting it is separate</b> — place the flat <b>Jackpot</b> bet (${fmt(JACKPOT_SIDE_BET)} per hand) to be eligible that round. With it down, a <b>suited three-of-a-kind</b> — your two cards plus the dealer's up card, all the same rank AND suit, the same rare "suited trips" condition 21+3 already pays its top rate on — pays out a share of the pool. Without the Jackpot bet, that hand still resolves normally; you just don't collect the extra. Like any other side bet, the Jackpot bet is lost on hands that don't qualify. This is deliberately a much rarer trigger than a plain suited natural blackjack (roughly 1 in 4,800 hands vs. 1 in 84) so it actually feels like a jackpot instead of a frequent bonus.</p>
         </div>
         <div class="row" style="justify-content:flex-end;margin-top:16px">
           <button class="btn primary" id="saltys-bj-rules-close">Got it</button>
@@ -199,13 +177,6 @@
     el.addEventListener("click", (e) => { if (e.target === el) close(); });
   }
 
-  // Shared visual CSS for anything both solo and live use: side-bet chip
-  // badges, the card deal-in animation, the live timer text, the new
-  // chip-stack bet visuals, the felt rules banner, and the corner shoe/
-  // discard decorations. Previously the side-bet chip styling only lived in
-  // ensureLiveStyle() (called only by the live table), so solo's side-bet
-  // indicators rendered with no styling at all — this fixes that by giving
-  // both modes one shared style tag to inject.
   const LS_SOUND_ENABLED = "saltys_bj_sound_enabled";
   function soundEnabled() {
     const v = localStorage.getItem(LS_SOUND_ENABLED);
@@ -213,16 +184,6 @@
   }
   function setSoundEnabled(on) { localStorage.setItem(LS_SOUND_ENABLED, on ? "1" : "0"); }
 
-  // A synthesized card-deal sound — no hosted audio file, so nothing to
-  // fetch, no CORS risk, no dependency on an external host staying up.
-  // This can't be an actual recorded sample (no audio library or licensed
-  // sound source available here) — it's three short noise layers shaped to
-  // match the real acoustic structure of a card being dealt: a sharp snap
-  // as it leaves the hand, an airy flutter as it slides through the air,
-  // and a soft tap as it lands, rather than one flat noise burst. Lazily
-  // creates the AudioContext on first use since browsers require a user
-  // gesture (a button click) before audio is allowed to play, which
-  // dealing already is.
   let audioCtx = null;
   function getAudioCtx() {
     if (audioCtx) return audioCtx;
@@ -236,7 +197,6 @@
     if (!ctx) return;
     if (ctx.state === "suspended") ctx.resume().catch(() => {});
     const now = ctx.currentTime;
-
     function noiseBuffer(durSec) {
       const buf = ctx.createBuffer(1, Math.max(1, Math.floor(ctx.sampleRate * durSec)), ctx.sampleRate);
       const data = buf.getChannelData(0);
@@ -264,11 +224,8 @@
       src.stop(startAt + durSec + 0.01);
     }
 
-    // Snap: the card leaving the hand — very short, sharp, high-frequency.
     fireLayer(now, 0.012, "highpass", 4500, 4500, 0.4, 0);
-    // Flutter: the airy whoosh as it glides, filter sweeping downward.
     fireLayer(now + 0.006, 0.05, "bandpass", 3200, 1400, 0.22, 0.008);
-    // Landing tap: soft low thump right at the end, as it settles on felt.
     fireLayer(now + 0.04, 0.02, "lowpass", 900, 900, 0.18, 0);
   }
   function soundToggleHtml() {
@@ -305,18 +262,14 @@
       #${OVERLAY_ID} .lbj-sidebet-label{ font-size:8px; font-weight:800; color:#fff; text-transform:uppercase; letter-spacing:.3px; text-shadow:0 1px 2px rgba(0,0,0,.7); }
       #${OVERLAY_ID} .lbj-sidebet-amt{ font:700 8px/1.2 "JetBrains Mono",monospace; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.7); }
 
-      /* --- chip stack: a bet sitting on the felt --- */
       #${OVERLAY_ID} .chip-stack-wrap{ display:flex; flex-direction:column; align-items:center; gap:4px; }
       #${OVERLAY_ID} .chip-stack-discs{ display:flex; flex-direction:row; align-items:center; }
       #${OVERLAY_ID} .chip-stack-disc{ border-radius:50%; border:2px solid #1a1400; flex-shrink:0; box-shadow:0 2px 4px rgba(0,0,0,.5), inset 0 0 0 2px rgba(255,255,255,.12); }
       #${OVERLAY_ID} .chip-stack-label{ font:700 11px/1 "JetBrains Mono",monospace; color:var(--gold-bright); text-shadow:0 1px 3px rgba(0,0,0,.8); white-space:nowrap; }
 
-      /* --- bet rail: real betting circles hanging off the table's bottom
-             edge, and the chip tray built right into the rail below them,
-             instead of a separate boxed panel elsewhere on the page --- */
       #${OVERLAY_ID} .ov-bet-rail{
         display:flex; justify-content:center; align-items:flex-end; gap:22px; flex-wrap:wrap;
-        margin:-22px auto 0; padding:16px 20px 10px; max-width:520px; position:relative; z-index:1;
+        margin:-22px auto 0; padding:16px 20px 10px; max-width:640px; position:relative; z-index:1;
         background:radial-gradient(ellipse at 50% 0%, rgba(20,60,44,.92), rgba(9,30,22,.88) 75%);
         border:1px solid rgba(212,175,55,.18); border-top:none; border-radius:0 0 32px 32px;
         box-shadow:inset 0 8px 16px -8px rgba(0,0,0,.5);
@@ -341,7 +294,22 @@
         box-shadow:inset 0 2px 8px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.3);
       }
 
-      /* --- felt rules banner (the curved "BLACKJACK PAYS 3 TO 2" text) --- */
+      #${OVERLAY_ID} .sbj-jackpot-spot{
+        position:relative; width:92px; height:92px; border-radius:50%; cursor:pointer;
+        background:radial-gradient(circle at 50% 35%, rgba(124,58,237,.3), #10261c 75%);
+        border:2px dashed var(--purple); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+        transition:box-shadow .15s ease, border-color .15s ease, transform .15s ease;
+      }
+      #${OVERLAY_ID} .sbj-jackpot-spot.active{ border-style:solid; border-color:var(--purple-bright); transform:translateY(-3px); box-shadow:0 0 0 3px rgba(124,58,237,.4); }
+      #${OVERLAY_ID} .sbj-jackpot-spot .ov-bet-spot-label{ color:var(--purple-bright); }
+      #${OVERLAY_ID} .sbj-jackpot-sub{ font:600 8px/1.2 "JetBrains Mono",monospace; color:var(--text-dim); text-align:center; padding:0 6px; }
+
+      #${OVERLAY_ID} .sbj-jackpot-banner{
+        text-align:center; font:800 20px/1 "Oswald",sans-serif; letter-spacing:1px; color:var(--gold-bright);
+        text-shadow:0 0 14px rgba(244,207,101,.5); margin-bottom:8px; transition:transform .15s ease;
+      }
+      #${OVERLAY_ID} .sbj-jackpot-banner.pulse{ transform:scale(1.06); }
+
       #${OVERLAY_ID} .ov-banner{ position:absolute; top:0.5%; left:50%; transform:translateX(-50%); width:46%; max-width:360px; pointer-events:none; z-index:0; }
       #${OVERLAY_ID} .ov-banner-main{ font:800 18px/1 "Oswald",sans-serif; letter-spacing:1.5px; fill:rgba(244,207,101,.5); }
       #${OVERLAY_ID} .ov-banner-sub, #${OVERLAY_ID} .ov-banner-sub2{
@@ -352,7 +320,6 @@
       #${OVERLAY_ID} .ov-banner-sub{ top:8.5%; }
       #${OVERLAY_ID} .ov-banner-sub2{ top:10.8%; }
 
-      /* --- corner shoe / discard tray decoration --- */
       #${OVERLAY_ID} .ov-corner-deco{ position:absolute; top:3%; display:flex; align-items:center; z-index:0; opacity:.9; }
       #${OVERLAY_ID} .ov-corner-left{ left:3%; }
       #${OVERLAY_ID} .ov-corner-right{ right:3%; }
@@ -363,7 +330,6 @@
         box-shadow:inset 0 2px 6px rgba(0,0,0,.5);
       }
 
-      /* --- rules modal (appended to document.body, like the disclaimer) --- */
       #saltys-bj-rules{
         position:fixed; inset:0; z-index:100002; display:flex; align-items:center; justify-content:center;
         background:rgba(0,0,0,.75); font:14px/1.6 Inter,system-ui,sans-serif;
@@ -379,26 +345,6 @@
       #saltys-bj-rules b{ color:#f4f1ea; }
     `;
     document.head.appendChild(s);
-  }
-
-  function emptyHand() {
-    return { cards: [], bet: 0, status: "active", result: null, acted: false, isSplitAces: false, paid: false, fromSplit: false };
-  }
-  function emptySeat() {
-    return {
-      uid: null, name: null, status: "empty", hands: [], activeHandIndex: 0,
-      sideBets: { perfectPairs: 0, twentyPlusThree: 0 }, sideBetResults: {}, sideBetsPaid: false,
-      behindBets: [], joinedAt: null, missedRounds: 0,
-      insuranceBet: 0, insuranceDeclined: false, insurancePaid: false,
-    };
-  }
-  function freshLiveTable(tableId) {
-    return {
-      tableId, seats: Array.from({ length: LIVE_BJ_SEATS }, emptySeat),
-      dealer: [], dealerHoleHidden: true, phase: "idle",
-      turnSeatIndex: -1, turnHandIndex: 0, roundId: 0,
-      phaseDeadline: null,
-    };
   }
 
   function evalPerfectPairs(cards) {
@@ -423,178 +369,6 @@
     return null;
   }
 
-  // -----------------------------------------------------------------------
-  // Lobby styling: hero banner, mode cards, tier cards. Injected lazily.
-  // -----------------------------------------------------------------------
-  function ensureBlackjackLobbyStyle() {
-    if (document.getElementById("saltys-bj-lobby-style")) return;
-    const s = document.createElement("style");
-    s.id = "saltys-bj-lobby-style";
-    s.textContent = `
-      #${OVERLAY_ID} .bj-lobby{ display:flex; flex-direction:column; gap:22px; }
-      #${OVERLAY_ID} .bj-lobby-hero{
-        text-align:center; padding:28px 20px; border-radius:16px;
-        background:radial-gradient(ellipse at 50% -20%, rgba(212,175,55,.12), transparent 60%), var(--panel);
-        border:1px solid var(--border);
-      }
-      #${OVERLAY_ID} .bj-lobby-eyebrow{ font-size:11px; letter-spacing:2px; text-transform:uppercase; color:var(--gold); font-weight:700; margin-bottom:6px; }
-      #${OVERLAY_ID} .bj-lobby-title{ font:800 32px/1 "Oswald",sans-serif; letter-spacing:.5px; }
-      #${OVERLAY_ID} .bj-lobby-sub{ color:var(--text-dim); font-size:13px; margin-top:8px; }
-      #${OVERLAY_ID} .bj-mode-grid{ display:grid; grid-template-columns:repeat(2,1fr); gap:18px; }
-      @media (max-width:720px){ #${OVERLAY_ID} .bj-mode-grid{ grid-template-columns:1fr; } }
-      #${OVERLAY_ID} .bj-mode-card{
-        position:relative; background:var(--panel); border:1px solid var(--border); border-radius:16px;
-        padding:26px 22px; display:flex; flex-direction:column; align-items:center; text-align:center; gap:10px;
-        transition:border-color .15s ease, transform .15s ease;
-      }
-      #${OVERLAY_ID} .bj-mode-card:hover{ border-color:var(--gold); transform:translateY(-2px); }
-      #${OVERLAY_ID} .bj-mode-card.featured{ border-color:rgba(212,175,55,.4); background:linear-gradient(180deg, rgba(212,175,55,.06), var(--panel) 60%); }
-      #${OVERLAY_ID} .bj-mode-badge{ position:absolute; top:14px; right:14px; background:var(--gold); color:#1a1400; font-weight:800; font-size:10px; text-transform:uppercase; letter-spacing:.5px; padding:3px 8px; border-radius:999px; }
-      #${OVERLAY_ID} .bj-mode-icon{ font-size:38px; }
-      #${OVERLAY_ID} .bj-mode-name{ font:700 18px/1 "Oswald",sans-serif; }
-      #${OVERLAY_ID} .bj-mode-desc{ color:var(--text-dim); font-size:12.5px; line-height:1.5; max-width:280px; }
-      #${OVERLAY_ID} .bj-tier-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
-      @media (max-width:820px){ #${OVERLAY_ID} .bj-tier-grid{ grid-template-columns:1fr; } }
-      #${OVERLAY_ID} .bj-tier-card{
-        background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:20px 16px;
-        display:flex; flex-direction:column; align-items:center; gap:8px; text-align:center;
-      }
-      #${OVERLAY_ID} .bj-tier-card.low{ border-top:3px solid var(--success); }
-      #${OVERLAY_ID} .bj-tier-card.mid{ border-top:3px solid var(--gold); }
-      #${OVERLAY_ID} .bj-tier-card.high{ border-top:3px solid var(--purple); }
-      #${OVERLAY_ID} .bj-tier-name{ font:700 17px/1 "Oswald",sans-serif; }
-      #${OVERLAY_ID} .bj-tier-limits{ font-size:12px; color:var(--gold-bright); font-weight:700; font-family:"JetBrains Mono",monospace; }
-      #${OVERLAY_ID} .pill.tier-low{ color:var(--success); border-color:var(--success); }
-      #${OVERLAY_ID} .pill.tier-mid{ color:var(--gold-bright); border-color:var(--gold); }
-      #${OVERLAY_ID} .pill.tier-high{ color:var(--purple-bright); border-color:var(--purple); }
-    `;
-    document.head.appendChild(s);
-  }
-
-  // =====================================================================
-  // HUB — mode select (Solo vs Live), then live tier select.
-  // =====================================================================
-  const BlackjackHub = (function () {
-    let root = null;
-    let mode = null;
-    let childUnmount = null;
-
-    function renderModeSelect() {
-      ensureBlackjackLobbyStyle();
-      root.innerHTML = `
-        <div class="bj-lobby">
-          <div class="bj-lobby-hero">
-            <div class="bj-lobby-eyebrow">Table Games</div>
-            <div class="bj-lobby-title">Blackjack</div>
-            <div class="bj-lobby-sub">Classic 6-deck shoe &middot; dealer stands on soft 17 &middot; blackjack pays 3:2</div>
-          </div>
-          <div class="bj-mode-grid">
-            <div class="bj-mode-card" data-mode="solo">
-              <div class="bj-mode-icon">🃏</div>
-              <div class="bj-mode-name">Solo Play</div>
-              <div class="bj-mode-desc">Play at your own pace against the dealer. Spread your action across up to 5 hands at once — no waiting on anyone.</div>
-              <button class="btn primary" data-mode="solo">Sit Down</button>
-            </div>
-            <div class="bj-mode-card featured" data-mode="live">
-              <div class="bj-mode-badge">Live</div>
-              <div class="bj-mode-icon">🎩</div>
-              <div class="bj-mode-name">Live Tables</div>
-              <div class="bj-mode-desc">Join other players at a real-time table. Choose your stakes — Low, Mid, or High Roller — then take a seat.</div>
-              <button class="btn primary gold" data-mode="live">Choose a Table</button>
-            </div>
-          </div>
-        </div>`;
-      root.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => {
-        mode = b.dataset.mode;
-        if (mode === "solo") mountSolo();
-        else renderTableSelect();
-      }));
-    }
-
-    function renderTableSelect() {
-      ensureBlackjackLobbyStyle();
-      root.innerHTML = `<div class="bj-lobby">
-        <div class="row" style="justify-content:space-between;align-items:center">
-          <div class="bj-lobby-title" style="font-size:22px">Choose Your Stakes</div>
-          <button class="btn small" id="lbj-back-mode">&larr; Back</button>
-        </div>
-        <div class="bj-tier-grid" id="lbj-table-cards">
-          ${LIVE_BJ_TIERS.map((tier) => `
-            <div class="bj-tier-card ${tier.key}" data-table-card="${tier.tableId}">
-              <div class="bj-tier-name">${tier.label}</div>
-              <div class="bj-tier-limits">${fmt(tier.minBet)} &ndash; ${fmt(tier.maxBet)} tokens</div>
-              <div class="muted" id="lbj-meta-${tier.tableId}" style="min-height:18px">Loading…</div>
-              <button class="btn primary small" data-choose="${tier.tableId}">Join Table</button>
-            </div>`).join("")}
-        </div>
-      </div>`;
-      LIVE_BJ_TIERS.forEach(async (tier) => {
-        const el = root.querySelector(`#lbj-meta-${tier.tableId}`);
-        if (!isFirebaseConfigured()) { if (el) el.textContent = "Firebase not configured"; return; }
-        try {
-          const u = await getAuthReady();
-          if (!u || !isFirebaseConfigured()) { if (el) el.textContent = "Offline — Firebase auth unavailable"; return; }
-          const ensureRef = getDb().collection("blackjacktables").doc(tier.tableId);
-          const snap = await ensureRef.get();
-          const t = snap.exists ? snap.data() : freshLiveTable(tier.tableId);
-          const occ = t.seats.filter((s) => s.status !== "empty").length;
-          if (el) el.textContent = `${occ}/${LIVE_BJ_SEATS} seated · ${t.phase === "idle" ? "idle" : t.phase}`;
-        } catch (e) {
-          if (el) el.textContent = "Could not load table.";
-        }
-      });
-      root.querySelector("#lbj-back-mode").addEventListener("click", () => { mode = null; renderModeSelect(); });
-      root.querySelectorAll("[data-choose]").forEach((b) => b.addEventListener("click", () => mountLive(b.dataset.choose)));
-    }
-
-    function unmountChild() {
-      if (childUnmount) { try { childUnmount(); } catch (e) {} childUnmount = null; }
-    }
-
-    function mountSolo() {
-      unmountChild();
-      const wrap = document.createElement("div");
-      root.innerHTML = "";
-      root.appendChild(wrap);
-      const backBtn = document.createElement("button");
-      backBtn.className = "btn small mt8";
-      backBtn.textContent = "← Back to mode select";
-      backBtn.addEventListener("click", () => { unmountChild(); mode = null; renderModeSelect(); });
-      root.appendChild(backBtn);
-      childUnmount = SoloBlackjackMulti.mount(wrap);
-    }
-
-    function mountLive(tableId) {
-      unmountChild();
-      const wrap = document.createElement("div");
-      root.innerHTML = "";
-      root.appendChild(wrap);
-      const backBtn = document.createElement("button");
-      backBtn.className = "btn small mt8";
-      backBtn.textContent = "← Choose a different table";
-      backBtn.addEventListener("click", () => { unmountChild(); renderTableSelect(); });
-      root.appendChild(backBtn);
-      LiveBlackjack.setTable(tableId);
-      const mountResult = LiveBlackjack.mount(wrap);
-      if (mountResult && typeof mountResult.then === "function") {
-        mountResult.then((u) => { childUnmount = u; });
-      } else {
-        childUnmount = mountResult;
-      }
-    }
-
-    return {
-      label: "Blackjack",
-      icon: "🃏",
-      order: 1,
-      mount(el) {
-        root = el; mode = null;
-        renderModeSelect();
-        return () => { unmountChild(); root = null; };
-      },
-    };
-  })();
-
   // =====================================================================
   // SOLO MULTI-HAND — up to 5 simultaneous hands vs one dealer, one shoe.
   // =====================================================================
@@ -609,12 +383,14 @@
     const MAX_HANDS = 5;
     const SOLO_DEAL_CARD_MS = 450;
     let root = null, shoe = null, state = null, busy = false, chipScrollPos = 0;
+    let jackpotUnsub = null, jackpotAmount = 0;
     const dealtAnimated = new Set();
 
     function freshState() {
       return {
         phase: "betting", selectedSeats: [], betPerHand: Math.min(100, MAX_BET),
-        sidePPPerHand: 0, side21PerHand: 0, activeBetTarget: "main", hands: [], dealer: [], dealerHoleHidden: true,
+        sidePPPerHand: 0, side21PerHand: 0, jackpotBetPerHand: false, activeBetTarget: "main",
+        hands: [], dealer: [], dealerHoleHidden: true,
         activeHandIndex: 0, insuranceOffered: false, insuranceBet: 0, insuranceResolved: false, lastResults: null,
       };
     }
@@ -628,10 +404,11 @@
       else if (target === "213") state.side21PerHand = v;
       else state.betPerHand = v;
     }
-    function newHand(cards, bet, sidePP = 0, side21 = 0, seatIdx) {
+    function newHand(cards, bet, sidePP = 0, side21 = 0, sideJackpot = 0, seatIdx) {
       return {
         cards, bet, status: "active", result: null, acted: false, isSplitAces: false,
-        sideBets: { perfectPairs: sidePP, twentyPlusThree: side21 }, sideBetResults: {}, seatIdx,
+        sideBets: { perfectPairs: sidePP, twentyPlusThree: side21, jackpot: sideJackpot },
+        sideBetResults: {}, seatIdx,
       };
     }
 
@@ -641,17 +418,20 @@
       const bet = clamp(Math.round(state.betPerHand), MIN_BET, MAX_BET);
       const pp = clamp(Math.round(state.sidePPPerHand || 0), 0, MAX_BET);
       const t21 = clamp(Math.round(state.side21PerHand || 0), 0, MAX_BET);
+      const jp = state.jackpotBetPerHand ? JACKPOT_SIDE_BET : 0;
       const numHands = state.selectedSeats.length;
-      const total = (bet + pp + t21) * numHands;
+      const total = (bet + pp + t21 + jp) * numHands;
       if (total > Balance.current) { toast("Not enough balance for that many seats at this bet."); return; }
       busy = true; render();
-      try { await Balance.applyDelta(-total, "solo_bj_deal_multi"); }
+      try {
+        await Balance.applyDelta(-total, "solo_bj_deal_multi");
         if (window.SaltyJackpot) window.SaltyJackpot.contribute(total, "blackjack");
+      }
       catch (e) { toast("Bet failed."); busy = false; render(); return; }
       if (!shoe) shoe = new Shoe(6, 0.25);
       dealtAnimated.clear();
       const seatOrder = [...state.selectedSeats].sort((a, b) => a - b);
-      state.hands = seatOrder.map((seatIdx) => newHand([], bet, pp, t21, seatIdx));
+      state.hands = seatOrder.map((seatIdx) => newHand([], bet, pp, t21, jp, seatIdx));
       state.dealer = [];
       state.phase = "player";
       state.dealerHoleHidden = true;
@@ -676,6 +456,11 @@
       for (const hand of state.hands) {
         if (hand.sideBets.perfectPairs > 0) hand.sideBetResults.perfectPairs = evalPerfectPairs(hand.cards);
         if (hand.sideBets.twentyPlusThree > 0) hand.sideBetResults.twentyPlusThree = evalTwentyPlusThree(hand.cards, state.dealer[0]);
+        // The jackpot trigger only depends on the player's two cards and
+        // the dealer's visible up card — both already known here — so it
+        // resolves immediately, before insurance or the dealer's hole card
+        // even come into play.
+        await resolveJackpotSideBet(hand, state.dealer[0]);
       }
       state.insuranceOffered = state.dealer[0].r === "A";
 
@@ -689,6 +474,31 @@
 
       busy = false;
       render();
+    }
+
+    // Resolves the jackpot side bet for one hand: a suited three-of-a-kind
+    // across the player's two cards and the dealer's up card — the same
+    // "suitedTrips" condition 21+3 already pays its top rate on, and, at
+    // roughly 1 in 4,800 hands, actually rare enough to be a jackpot (a
+    // suited natural blackjack, by contrast, is ~1 in 84 — too common).
+    // Like any other side bet, a hand with the jackpot bet down that
+    // doesn't hit this condition simply loses that stake.
+    async function resolveJackpotSideBet(hand, dealerUpCard) {
+      if (!hand.sideBets || !hand.sideBets.jackpot) return;
+      const stake = hand.sideBets.jackpot;
+      const suitedTrips = evalTwentyPlusThree(hand.cards, dealerUpCard) === "suitedTrips";
+      let payout = 0;
+      if (suitedTrips && window.SaltyJackpot) {
+        payout = await window.SaltyJackpot.award(JACKPOT_TIER, "blackjack", "Suited three of a kind (your two cards + dealer's up card)", true);
+      }
+      if (payout > 0) {
+        await Balance.applyDelta(stake + payout, "solo_bj_jackpot_win");
+        hand.sideBetResults.jackpot = "win";
+        hand.jackpotProfit = payout;
+      } else {
+        hand.sideBetResults.jackpot = "lose";
+        hand.jackpotProfit = -stake;
+      }
     }
 
     // The "dealer peek": checks the hole card, resolves any blackjacks
@@ -731,10 +541,6 @@
 
     async function takeInsurance() {
       if (busy || !state.insuranceOffered) { state.insuranceResolved = true; state.insuranceBet = 0; return; }
-      // One insurance decision covers the whole round, so it's sized to
-      // your total exposure across every hand you're playing this round —
-      // not just the first seat's bet — since it's the only chance you get
-      // to insure any of them.
       const totalBet = state.hands.reduce((s, h) => s + h.bet, 0);
       const amount = clamp(Math.round(totalBet / 2), MIN_BET, MAX_BET);
       if (amount > Balance.current) { toast("Not enough balance for insurance."); return; }
@@ -782,7 +588,7 @@
         if (Balance.current < hand.bet) { toast("Not enough balance to split."); busy = false; render(); return; }
         await Balance.applyDelta(-hand.bet, "solo_bj_split_multi");
         const isAces = c0.r === "A";
-        const newH = newHand([c1], hand.bet, 0, 0, hand.seatIdx);
+        const newH = newHand([c1], hand.bet, 0, 0, 0, hand.seatIdx);
         newH.isSplitAces = isAces;
         newH.fromSplit = true;
         hand.cards = [c0];
@@ -838,6 +644,7 @@
       let totalProfit = 0;
       let handProfitTotal = 0;
       let sideBetProfitTotal = 0;
+      let jackpotProfitTotal = 0;
       for (const hand of state.hands) {
         let payout = 0;
         if (hand.result != null) {
@@ -856,7 +663,6 @@
         const mainProfit = hand.profit != null ? hand.profit : payout - hand.bet;
         if (hand.profit == null) hand.profit = mainProfit;
         handProfitTotal += mainProfit;
-
         let sbProfit = 0;
         const pp = hand.sideBets && hand.sideBets.perfectPairs;
         const tw = hand.sideBets && hand.sideBets.twentyPlusThree;
@@ -870,6 +676,13 @@
           if (r) { const win = tw * SIDE_BET_PAYTABLES.twentyPlusThree[r] + tw; await Balance.applyDelta(win, "solo_bj_213_win"); sbProfit += win - tw; }
           else sbProfit -= tw;
         }
+        // Jackpot side bet already resolved (and paid, if it won) back at
+        // deal time — hand.jackpotProfit is just folded into the totals
+        // here so the round summary reflects it.
+        if (hand.sideBets && hand.sideBets.jackpot > 0 && hand.jackpotProfit != null) {
+          sbProfit += hand.jackpotProfit;
+          jackpotProfitTotal += hand.jackpotProfit;
+        }
         hand.profit += sbProfit;
         sideBetProfitTotal += sbProfit;
         totalProfit += mainProfit + sbProfit;
@@ -881,7 +694,7 @@
         state.insuranceResolved = true;
         totalProfit += insuranceProfit;
       }
-      state.lastResults = { totalProfit, handProfitTotal, sideBetProfitTotal, insuranceProfit };
+      state.lastResults = { totalProfit, handProfitTotal, sideBetProfitTotal, insuranceProfit, jackpotProfitTotal };
       render();
     }
 
@@ -919,9 +732,15 @@
             const r = hand.sideBetResults && hand.sideBetResults.twentyPlusThree;
             soloSideChips.push(`<div class="lbj-sidebet-chip ${r ? "hit" : ""}" title="21+3: ${fmt(hand.sideBets.twentyPlusThree)}${r ? " · " + r : ""}"><span class="lbj-sidebet-label">21+3</span><span class="lbj-sidebet-amt">${fmt(hand.sideBets.twentyPlusThree)}</span></div>`);
           }
+          if (hand.sideBets && hand.sideBets.jackpot > 0) {
+            const r = hand.sideBetResults && hand.sideBetResults.jackpot;
+            soloSideChips.push(`<div class="lbj-sidebet-chip ${r === "win" ? "hit" : ""}" title="Jackpot: ${fmt(hand.sideBets.jackpot)}${r ? " · " + r : ""}"><span class="lbj-sidebet-label">JP</span><span class="lbj-sidebet-amt">${fmt(hand.sideBets.jackpot)}</span></div>`);
+          }
           const soloSideBetHtml = soloSideChips.length ? `<div class="lbj-sidebet-strip">${soloSideChips.join("")}</div>` : "";
-          const resultOverlay = hand.status === "bust" ? `<div class="ov-result-overlay">${v.total} – Bust</div>`
-            : hand.result === "blackjack" ? `<div class="ov-result-overlay">Blackjack!</div>` : "";
+          const jackpotWinTag = hand.sideBetResults && hand.sideBetResults.jackpot === "win" ? ` 💰 JACKPOT!` : "";
+          const resultOverlay = hand.status === "bust" ? `<div class="ov-result-overlay">${v.total} – Bust${jackpotWinTag}</div>`
+            : hand.result === "blackjack" ? `<div class="ov-result-overlay">Blackjack!${jackpotWinTag}</div>`
+            : jackpotWinTag ? `<div class="ov-result-overlay">${jackpotWinTag.trim()}</div>` : "";
           const winBadge = hand.result ? `<div class="ov-win-badge ${hand.profit > 0 ? "win" : hand.profit < 0 ? "lose" : "push"}">
               ${hand.profit > 0 ? "Win" : hand.profit < 0 ? "Lose" : "Push"}
             </div>` : "";
@@ -947,11 +766,6 @@
         </div>` : "";
       const insuredBadge = state.insuranceBet > 0 ? `<div class="muted center" style="margin-top:6px">Insured for ${fmt(state.insuranceBet)}</div>` : "";
 
-      // One clear, prominent result — centered on the felt instead of a
-      // small line tucked below the table — with a real breakdown instead
-      // of a single lumped number, since hand and side-bet results are
-      // often opposite signs and a single total can hide what actually
-      // happened.
       const roundSummaryHtml = state.phase === "settled" && state.lastResults ? (() => {
         const r = state.lastResults;
         const cls = r.totalProfit > 0 ? "win" : r.totalProfit < 0 ? "lose" : "push";
@@ -962,6 +776,7 @@
           <div class="ov-round-summary-lines">
             ${line("Hands", r.handProfitTotal)}
             ${r.sideBetProfitTotal !== 0 ? line("Side Bets", r.sideBetProfitTotal) : ""}
+            ${r.jackpotProfitTotal ? line("Jackpot", r.jackpotProfitTotal) : ""}
             ${r.insuranceProfit ? line("Insurance", r.insuranceProfit) : ""}
             <div class="ov-summary-line total"><span>Total</span><span>${r.totalProfit >= 0 ? "+" : ""}${fmt(r.totalProfit)}</span></div>
           </div>
@@ -985,6 +800,7 @@
     function render() {
       if (!root) return;
       ensureBlackjackSharedStyle();
+      const jackpotBanner = `<div class="sbj-jackpot-banner" id="sbj-jackpot-banner">PROGRESSIVE JACKPOT: ${fmt(jackpotAmount)}</div>`;
       if (state.phase === "betting") {
         const seatPickHtml = SEAT_POS.map((pos, i) => {
           const picked = state.selectedSeats.includes(i);
@@ -997,9 +813,10 @@
           ${betSpotHtml("pp", state.sidePPPerHand, target === "pp", "Pairs", true)}
           ${betSpotHtml("main", state.betPerHand, target === "main", "Bet", false)}
           ${betSpotHtml("213", state.side21PerHand, target === "213", "21+3", true)}
+          ${jackpotSpotHtml(state.jackpotBetPerHand)}
         </div>`;
-        const totalWager = (state.betPerHand + (state.sidePPPerHand || 0) + (state.side21PerHand || 0)) * state.selectedSeats.length;
-        root.innerHTML = rulesButtonRowHtml() + `<div class="ov-wrap"><div class="ov-table">
+        const totalWager = (state.betPerHand + (state.sidePPPerHand || 0) + (state.side21PerHand || 0) + (state.jackpotBetPerHand ? JACKPOT_SIDE_BET : 0)) * state.selectedSeats.length;
+        root.innerHTML = jackpotBanner + rulesButtonRowHtml() + `<div class="ov-wrap"><div class="ov-table">
             ${tableBannerHtml()}
             ${shoeDecorHtml()}
             <div class="ov-dealer"><div class="ov-dealer-hand"></div><div class="ov-dealer-label">Dealer's Cards</div></div>
@@ -1033,9 +850,16 @@
           render();
         }));
 
-        // Click a spot to make it the active chip-click target; drag a chip
-        // straight onto any spot regardless of which one is active — both
-        // work, matching how you'd actually place chips at a real table.
+        const jackpotToggle = root.querySelector("#sbj-jackpot-toggle");
+        if (jackpotToggle) jackpotToggle.addEventListener("click", () => {
+          if (!state.jackpotBetPerHand && JACKPOT_SIDE_BET * state.selectedSeats.length > Balance.current) {
+            toast("Not enough balance for the jackpot bet on every selected seat.");
+            return;
+          }
+          state.jackpotBetPerHand = !state.jackpotBetPerHand;
+          render();
+        });
+
         root.querySelectorAll(".ov-bet-spot").forEach((spot) => {
           spot.addEventListener("click", () => { state.activeBetTarget = spot.dataset.target; render(); });
           spot.addEventListener("dragover", (e) => { e.preventDefault(); spot.classList.add("drag-over"); });
@@ -1062,7 +886,7 @@
         });
         const chipSelect = root.querySelector(".chip-select");
         if (chipSelect) {
-          chipSelect.scrollLeft = chipScrollPos; // restore after the DOM rebuild reset it to 0
+          chipSelect.scrollLeft = chipScrollPos;
           chipSelect.addEventListener("wheel", (e) => {
             if (chipSelect.scrollWidth <= chipSelect.clientWidth) return;
             e.preventDefault();
@@ -1081,12 +905,12 @@
           state.betPerHand = 0;
           state.sidePPPerHand = 0;
           state.side21PerHand = 0;
+          state.jackpotBetPerHand = false;
           render();
         });
         root.querySelector("#sbj-deal").addEventListener("click", startDeal);
         return;
       }
-
       let controls;
       if (state.phase === "player") {
         const hand = currentHand();
@@ -1103,13 +927,13 @@
         </div>`;
       } else if (state.phase === "settled") {
         controls = `<div class="row center">
-          <button class="btn primary" id="sbj-rebet">Rebet ${fmt(state.betPerHand)}${state.sidePPPerHand || state.side21PerHand ? " + sides" : ""}</button>
+          <button class="btn primary" id="sbj-rebet">Rebet ${fmt(state.betPerHand)}${state.sidePPPerHand || state.side21PerHand || state.jackpotBetPerHand ? " + sides" : ""}</button>
           <button class="btn" id="sbj-again">Change Bet</button>
         </div>`;
       } else {
         controls = `<div class="center muted">Dealer playing…</div>`;
       }
-      root.innerHTML = rulesButtonRowHtml() + renderSoloOvalTable() + `<div class="mt16">${controls}</div>`;
+      root.innerHTML = jackpotBanner + rulesButtonRowHtml() + renderSoloOvalTable() + `<div class="mt16">${controls}</div>`;
       wireRulesButton(root);
       wireSoundToggle(root, render);
       if (state.phase === "player") {
@@ -1124,825 +948,54 @@
         if (insNo) insNo.addEventListener("click", declineInsurance);
       } else if (state.phase === "settled") {
         root.querySelector("#sbj-again").addEventListener("click", () => {
-          const seats = state.selectedSeats, b = state.betPerHand, pp = state.sidePPPerHand, t21 = state.side21PerHand;
+          const seats = state.selectedSeats, b = state.betPerHand, pp = state.sidePPPerHand, t21 = state.side21PerHand, jp = state.jackpotBetPerHand;
           state = freshState();
           state.selectedSeats = seats;
           state.betPerHand = b;
           state.sidePPPerHand = pp;
           state.side21PerHand = t21;
+          state.jackpotBetPerHand = jp;
           render();
         });
         root.querySelector("#sbj-rebet").addEventListener("click", () => {
-          const seats = state.selectedSeats, b = state.betPerHand, pp = state.sidePPPerHand, t21 = state.side21PerHand;
+          const seats = state.selectedSeats, b = state.betPerHand, pp = state.sidePPPerHand, t21 = state.side21PerHand, jp = state.jackpotBetPerHand;
           state = freshState();
           state.selectedSeats = seats;
           state.betPerHand = b;
           state.sidePPPerHand = pp;
           state.side21PerHand = t21;
+          state.jackpotBetPerHand = jp;
           startDeal();
         });
       }
     }
 
     return {
+      label: "Blackjack",
+      icon: "🃏",
+      order: 1,
       mount(el) {
         root = el;
         state = freshState();
+        if (window.SaltyJackpot) {
+          jackpotUnsub = window.SaltyJackpot.subscribe((pool) => {
+            jackpotAmount = pool.amount;
+            const el2 = document.getElementById("sbj-jackpot-banner");
+            if (el2) {
+              el2.textContent = `PROGRESSIVE JACKPOT: ${fmt(jackpotAmount)}`;
+              el2.classList.add("pulse");
+              setTimeout(() => el2.classList.remove("pulse"), 500);
+            }
+          });
+        }
         render();
-        return () => { root = null; };
+        return () => {
+          if (jackpotUnsub) jackpotUnsub();
+          root = null;
+        };
       },
     };
   })();
 
-  // =====================================================================
-  // LIVE TABLES — idle until seated, tier-based bet limits, 25s betting,
-  // 25s per-decision timer, split up to 4 hands, bet-behind, side bets,
-  // kick after 2 unbet misses.
-  // =====================================================================
-  const LiveBlackjack = (function () {
-    let root = null, tableId = "table-mid", unsubTable = null, unsubChat = null, tickTimer = null;
-    let mySeatIndex = -1, tableDoc = null, chatMessages = [], shoe = null, busy = false, lastCardCount = -1;
-    let myPendingBet = 100, myPendingPP = 0, myPending213 = 0, myPendingBehind = 50;
-    const dealtAnimated = new Set();
-
-    function tref() { return getDb().collection("blackjacktables").doc(tableId); }
-    function chatRef() { return tref().collection("chat"); }
-    function setTable(id) { tableId = id; mySeatIndex = -1; lastCardCount = -1; }
-
-    async function ensureTableDoc() {
-      const snap = await tref().get();
-      if (!snap.exists) await tref().set(freshLiveTable(tableId));
-    }
-    function occupiedSeats(t) { return t.seats.filter((s) => s.status !== "empty"); }
-    function activeRoster(t) {
-      return t.seats.map((s, i) => ({ ...s, i })).filter((s) => s.status === "waiting" || s.status === "active")
-        .sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0)).slice(0, LIVE_BJ_MAX_ACTIVE).map((s) => s.i);
-    }
-
-    async function joinSeat(idx) {
-      if (!isFirebaseConfigured()) { toast("Live tables require Firebase to be configured."); return; }
-      await getAuthReady();
-      try {
-        await getDb().runTransaction(async (tx) => {
-          const t = (await tx.get(tref())).data();
-          if (t.seats[idx].status !== "empty") throw new Error("taken");
-          if (t.seats.some((s) => s.uid === myUid())) throw new Error("already-seated");
-          t.seats[idx] = { ...emptySeat(), uid: myUid(), name: localStorage.getItem(LS_HANDLE) || "Player", status: "waiting", joinedAt: Date.now() };
-          if (t.phase === "idle") { t.phase = "betting"; t.phaseDeadline = Date.now() + LIVE_BJ_BETTING_MS; }
-          tx.set(tref(), t);
-        });
-        mySeatIndex = idx;
-        const tier = tierForTable(tableId);
-        myPendingBet = clamp(myPendingBet, tier.minBet, tier.maxBet);
-      } catch (e) { toast("Could not join that seat."); }
-    }
-
-    async function leaveSeat() {
-      if (mySeatIndex < 0) return;
-      await getDb().runTransaction(async (tx) => {
-        const t = (await tx.get(tref())).data();
-        if (t.seats[mySeatIndex].uid === myUid()) t.seats[mySeatIndex] = emptySeat();
-        if (occupiedSeats(t).length === 0) { t.phase = "idle"; t.phaseDeadline = null; }
-        tx.set(tref(), t);
-      });
-      mySeatIndex = -1;
-    }
-
-    async function placeBet(amount, sidePP, side21) {
-      if (mySeatIndex < 0) { toast("Take a seat first."); return; }
-      const tier = tierForTable(tableId);
-      amount = clamp(Math.round(amount), tier.minBet, tier.maxBet);
-      const totalDebit = amount + (sidePP || 0) + (side21 || 0);
-      if (totalDebit > Balance.current) { toast("Not enough balance."); return; }
-      try {
-        await getDb().runTransaction(async (tx) => {
-          const t = (await tx.get(tref())).data();
-          if (t.phase !== "betting") throw new Error("betting-closed");
-          const seat = t.seats[mySeatIndex];
-          seat.hands = [{ ...emptyHand(), bet: amount }];
-          seat.sideBets = { perfectPairs: sidePP || 0, twentyPlusThree: side21 || 0 };
-          seat.missedRounds = 0;
-          tx.set(tref(), t);
-        });
-        await Balance.applyDelta(-totalDebit, "live_bj_bet");
-        if (window.SaltyJackpot) window.SaltyJackpot.contribute(totalDebit, "blackjack");
-      } catch (e) { toast("Bet failed: " + e.message); }
-    }
-
-    async function betBehind(seatIdx, amount) {
-      amount = clamp(Math.round(amount), MIN_BET, MAX_BET);
-      if (amount > Balance.current) { toast("Not enough balance."); return; }
-      try {
-        await getDb().runTransaction(async (tx) => {
-          const t = (await tx.get(tref())).data();
-          if (t.phase !== "betting") throw new Error("betting-closed");
-          const seat = t.seats[seatIdx];
-          if (!seat || seat.status === "empty") throw new Error("no-seat");
-          if (seat.behindBets.some((b) => b.uid === myUid())) throw new Error("already-behind");
-          seat.behindBets.push({ uid: myUid(), name: localStorage.getItem(LS_HANDLE) || "Player", amount, result: null, paid: false });
-          tx.set(tref(), t);
-        });
-        await Balance.applyDelta(-amount, "live_bj_behind");
-        if (window.SaltyJackpot) window.SaltyJackpot.contribute(amount, "blackjack");
-        toast(`Bet placed behind seat ${seatIdx + 1}.`);
-      } catch (e) { toast("Behind bet failed: " + e.message); }
-    }
-
-    async function tick() {
-      const t = (await tref().get()).data();
-      if (!t) return;
-      const occ = occupiedSeats(t);
-      if (occ.length === 0) {
-        if (t.phase !== "idle") { try { await tref().set({ ...t, phase: "idle", phaseDeadline: null }); } catch (e) {} }
-        return;
-      }
-      const now = Date.now();
-      if (t.phase === "betting" && t.phaseDeadline && now >= t.phaseDeadline) {
-        try {
-          await getDb().runTransaction(async (tx) => {
-            const t2 = (await tx.get(tref())).data();
-            if (t2.phase !== "betting") throw new Error("advanced");
-            t2.seats.forEach((seat, i) => {
-              if (seat.status === "empty") return;
-              const bet = seat.hands[0] && seat.hands[0].bet > 0;
-              if (bet) seat.missedRounds = 0;
-              else { seat.missedRounds = (seat.missedRounds || 0) + 1; if (seat.missedRounds >= LIVE_BJ_KICK_AFTER_MISSES) t2.seats[i] = emptySeat(); }
-            });
-            const roster = t2.seats.map((s, i) => ({ ...s, i }))
-              .filter((s) => s.status === "waiting" || s.status === "active")
-              .sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0)).slice(0, LIVE_BJ_MAX_ACTIVE).map((s) => s.i);
-            const withBets = roster.filter((i) => t2.seats[i].hands[0] && t2.seats[i].hands[0].bet > 0);
-            if (withBets.length === 0) {
-              const stillOccupied = t2.seats.some((s) => s.status !== "empty");
-              if (!stillOccupied) { t2.phase = "idle"; t2.phaseDeadline = null; }
-              else { t2.phaseDeadline = Date.now() + LIVE_BJ_BETTING_MS; }
-              tx.set(tref(), t2);
-              return;
-            }
-            withBets.forEach((i) => { t2.seats[i].status = "active"; t2.seats[i].insuranceBet = 0; t2.seats[i].insuranceDeclined = false; });
-            t2.phase = "dealing";
-            t2.dealer = [];
-            t2.dealerHoleHidden = true;
-            t2.roundId = (t2.roundId || 0) + 1;
-            t2.phaseDeadline = Date.now() + LIVE_BJ_DEAL_TIMEOUT_MS;
-            tx.set(tref(), t2);
-          });
-          const after = (await tref().get()).data();
-          if (after.phase === "dealing") await dealSequence();
-        } catch (e) { /* another client already advanced this round */ }
-        return;
-      }
-      if (t.phase === "dealing" && t.phaseDeadline && now >= t.phaseDeadline) {
-        try {
-          let shouldDeal = false;
-          await getDb().runTransaction(async (tx) => {
-            const t2 = (await tx.get(tref())).data();
-            if (t2.phase !== "dealing" || !(t2.phaseDeadline && Date.now() >= t2.phaseDeadline)) throw new Error("already-progressed");
-            t2.phaseDeadline = Date.now() + LIVE_BJ_DEAL_TIMEOUT_MS;
-            tx.set(tref(), t2);
-            shouldDeal = true;
-          });
-          if (shouldDeal) await dealSequence();
-        } catch (e) { /* another client already resumed or finished it */ }
-        return;
-      }
-      if (t.phase === "insurance") {
-        const expired = t.phaseDeadline && now >= t.phaseDeadline;
-        const allDecided = t.seats.every((s) => s.status !== "active" || s.insuranceBet > 0 || s.insuranceDeclined);
-        if (!expired && !allDecided) return;
-        try {
-          let shouldResolve = false;
-          let committedT = null;
-          await getDb().runTransaction(async (tx) => {
-            const t2 = (await tx.get(tref())).data();
-            if (t2.phase !== "insurance") throw new Error("already-progressed");
-            for (const seat of t2.seats) {
-              if (seat.status === "active" && seat.insuranceBet === 0 && !seat.insuranceDeclined) seat.insuranceDeclined = true;
-            }
-            tx.set(tref(), t2);
-            shouldResolve = true;
-            committedT = t2;
-          });
-          if (shouldResolve && committedT) await resolveDealerPeekLive(committedT);
-        } catch (e) { /* another client already resolved this round's insurance */ }
-        return;
-      }
-      if (t.phase === "player-turns") {
-        const expired = t.phaseDeadline && now >= t.phaseDeadline;
-        if (!expired) return;
-        // Normal case: nobody acted before the timer ran out — auto-stand.
-        // Fallback case: the hand was already resolved (bust/stand/double/
-        // split-aces) but, for whatever reason (e.g. the acting client lost
-        // its connection right after committing), the turn never advanced.
-        // Either way, once the deadline is up there's nothing left to wait
-        // on, so move play along.
-        const seat = t.seats[t.turnSeatIndex];
-        const hand = seat && seat.hands[t.turnHandIndex];
-        if (hand && hand.status === "active") hand.status = "stood";
-        await advanceTurn(t);
-      }
-    }
-
-    async function dealSequence() {
-      if (!shoe) shoe = new Shoe(6, 0.25);
-      const t = (await tref().get()).data();
-      if (t.phase !== "dealing") return;
-      const startRound = t.dealer.length;
-      for (let round = startRound; round < 2; round++) {
-        for (const seat of t.seats) {
-          if (seat.status === "active" && seat.hands[0].cards.length === round) seat.hands[0].cards.push(shoe.draw());
-        }
-        if (t.dealer.length === round) t.dealer.push(shoe.draw());
-      }
-      await tref().set(t);
-      await delay(LIVE_BJ_DEAL_CARD_MS);
-
-      for (const seat of t.seats) {
-        if (seat.status !== "active") continue;
-        const cards = seat.hands[0].cards;
-        if (seat.sideBets.perfectPairs > 0) seat.sideBetResults.perfectPairs = evalPerfectPairs(cards);
-        if (seat.sideBets.twentyPlusThree > 0) seat.sideBetResults.twentyPlusThree = evalTwentyPlusThree(cards, t.dealer[0]);
-      }
-
-      // Real tables offer insurance and wait for every player to decide
-      // BEFORE the dealer checks their hole card — peeking first would make
-      // the decision meaningless. So when the up-card is an Ace, pause here
-      // in a dedicated "insurance" phase instead of resolving immediately;
-      // tick() (or takeInsurance/declineInsurance, once everyone's decided)
-      // carries the peek out from there.
-      if (t.dealer[0].r === "A") {
-        t.phase = "insurance";
-        t.phaseDeadline = Date.now() + LIVE_BJ_INSURANCE_MS;
-        await tref().set(t);
-        return;
-      }
-
-      await resolveDealerPeekLive(t);
-    }
-
-    // The "dealer peek": checks the hole card, resolves any blackjacks
-    // (a player's, the dealer's, or both), and — since insurance decisions
-    // are already settled by the time this runs — leaves insurance payout
-    // to reconcileMyPayouts once the round reaches "settled". If the
-    // dealer does have blackjack, every hand is done right here; nobody
-    // plays a hand out against a dealer that already can't lose.
-    async function resolveDealerPeekLive(t) {
-      const dealerBJ = isBlackjack(t.dealer);
-      for (const seat of t.seats) {
-        if (seat.status !== "active") continue;
-        const hand = seat.hands[0];
-        const handBJ = isBlackjack(hand.cards);
-        if (dealerBJ) {
-          hand.acted = true;
-          if (handBJ) { hand.status = "push"; hand.result = "push"; hand.profit = 0; }
-          else { hand.status = "push"; hand.result = "lose"; hand.profit = -hand.bet; }
-        } else if (handBJ) {
-          hand.status = "blackjack"; hand.result = "blackjack"; hand.acted = true; hand.profit = Math.round(hand.bet * 1.5);
-        }
-      }
-      t.phase = "player-turns";
-      t.turnSeatIndex = t.seats.findIndex((s) => s.status === "active" && s.hands[0].status === "active");
-      t.turnHandIndex = 0;
-      t.phaseDeadline = Date.now() + LIVE_BJ_TURN_MS;
-      await tref().set(t);
-
-      if (t.turnSeatIndex < 0) await advanceTurn(t);
-    }
-
-    async function takeInsurance(seatIdx) {
-      if (busy) return;
-      busy = true;
-      try {
-        let amount = 0;
-        let allDecided = false;
-        let committedT = null;
-        await getDb().runTransaction(async (tx) => {
-          const t = (await tx.get(tref())).data();
-          if (t.phase !== "insurance") throw new Error("insurance-closed");
-          const seat = t.seats[seatIdx];
-          if (!seat || seat.uid !== myUid() || seat.insuranceBet > 0) throw new Error("cannot-insure");
-          amount = clamp(Math.round((seat.hands[0]?.bet || 0) / 2), MIN_BET, MAX_BET);
-          if (Balance.current < amount) throw new Error("insufficient-balance");
-          seat.insuranceBet = amount;
-          allDecided = t.seats.every((s) => s.status !== "active" || s.insuranceBet > 0 || s.insuranceDeclined);
-          tx.set(tref(), t);
-          committedT = t;
-        });
-        if (amount > 0) await Balance.applyDelta(-amount, "live_bj_insurance_bet");
-        if (allDecided && committedT) await resolveDealerPeekLive(committedT);
-      } catch (e) { toast("Insurance failed: " + e.message); }
-      busy = false;
-    }
-    async function declineInsurance(seatIdx) {
-      if (busy) return;
-      busy = true;
-      try {
-        let allDecided = false;
-        let committedT = null;
-        await getDb().runTransaction(async (tx) => {
-          const t = (await tx.get(tref())).data();
-          if (t.phase !== "insurance") throw new Error("insurance-closed");
-          const seat = t.seats[seatIdx];
-          if (!seat || seat.uid !== myUid()) throw new Error("not-your-seat");
-          seat.insuranceDeclined = true;
-          allDecided = t.seats.every((s) => s.status !== "active" || s.insuranceBet > 0 || s.insuranceDeclined);
-          tx.set(tref(), t);
-          committedT = t;
-        });
-        if (allDecided && committedT) await resolveDealerPeekLive(committedT);
-      } catch (e) { /* ignore */ }
-      busy = false;
-    }
-
-    async function act(action) {
-      if (mySeatIndex < 0 || busy) return;
-      busy = true;
-      let debit = 0;
-      let committedT = null;
-      let needsAdvance = false;
-      try {
-        await getDb().runTransaction(async (tx) => {
-          const t = (await tx.get(tref())).data();
-          if (t.phase !== "player-turns" || t.turnSeatIndex !== mySeatIndex) throw new Error("not-your-turn");
-          const seat = t.seats[mySeatIndex];
-          const hi = t.turnHandIndex;
-          const hand = seat.hands[hi];
-          if (action === "hit") {
-            hand.cards.push(shoe.draw());
-            hand.acted = true;
-            const v = bjHandValue(hand.cards).total;
-            if (v > 21) hand.status = "bust";
-            else if (v === 21 || hand.isSplitAces) hand.status = "stood";
-          } else if (action === "stand") {
-            hand.status = "stood"; hand.acted = true;
-          } else if (action === "double") {
-            if (Balance.current < hand.bet) throw new Error("insufficient-balance");
-            debit = hand.bet;
-            hand.bet *= 2;
-            hand.cards.push(shoe.draw());
-            hand.status = bjHandValue(hand.cards).total > 21 ? "bust" : "stood";
-            hand.acted = true;
-          } else if (action === "split") {
-            if (seat.hands.length > LIVE_BJ_MAX_SPLITS) throw new Error("max-splits");
-            const c0 = hand.cards[0], c1 = hand.cards[1];
-            if (!isSplittablePair(c0, c1)) throw new Error("not-pair");
-            if (Balance.current < hand.bet) throw new Error("insufficient-balance");
-            debit = hand.bet;
-            const isAces = c0.r === "A";
-            hand.cards = [c0, shoe.draw()];
-            hand.isSplitAces = isAces;
-            hand.fromSplit = true;
-            if (isAces) hand.status = "stood";
-            const newHand2 = { ...emptyHand(), cards: [c1, shoe.draw()], bet: hand.bet, isSplitAces: isAces, fromSplit: true };
-            if (isAces) newHand2.status = "stood";
-            seat.hands.splice(hi + 1, 0, newHand2);
-          } else if (action === "surrender") {
-            if (hand.acted || hand.cards.length !== 2 || hand.fromSplit) throw new Error("cannot-surrender");
-            hand.status = "surrender"; hand.result = "surrender"; hand.acted = true;
-            hand.profit = -Math.round(hand.bet * (1 - SURRENDER_RETURN_FRACTION));
-          }
-          needsAdvance = hand.status !== "active";
-          t.phaseDeadline = Date.now() + LIVE_BJ_TURN_MS;
-          tx.set(tref(), t);
-          committedT = t;
-        });
-        if (debit > 0) await Balance.applyDelta(-debit, action === "double" ? "live_bj_double" : "live_bj_split");
-        // Standing, busting, doubling, or auto-resolved split aces all end this
-        // hand's turn — move play on to the next hand/seat (or to the dealer if
-        // that was the last one). A plain hit that doesn't bust leaves the hand
-        // active, so needsAdvance stays false and the same player keeps acting.
-        if (needsAdvance && committedT) await advanceTurn(committedT);
-      } catch (e) { toast("Action failed: " + e.message); }
-      busy = false;
-    }
-
-
-    function seatHasPlayableHand(seat) { return seat && seat.status === "active" && seat.hands.some((h) => h.status === "active"); }
-
-    async function advanceTurn(t) {
-      const seat = t.seats[t.turnSeatIndex];
-      if (seat) {
-        let hi = t.turnHandIndex + 1;
-        while (hi < seat.hands.length && seat.hands[hi].status !== "active") hi++;
-        if (hi < seat.hands.length) {
-          t.turnHandIndex = hi;
-          t.phaseDeadline = Date.now() + LIVE_BJ_TURN_MS;
-          await tref().set(t);
-          return;
-        }
-      }
-      let next = t.turnSeatIndex + 1;
-      while (next < LIVE_BJ_SEATS && !seatHasPlayableHand(t.seats[next])) next++;
-      if (next >= LIVE_BJ_SEATS) {
-        await runDealerAndSettle(t);
-      } else {
-        const nextHi = t.seats[next].hands.findIndex((h) => h.status === "active");
-        t.turnSeatIndex = next;
-        t.turnHandIndex = nextHi;
-        t.phaseDeadline = Date.now() + LIVE_BJ_TURN_MS;
-        await tref().set(t);
-      }
-    }
-
-    async function runDealerAndSettle(t) {
-      t.phase = "dealer";
-      t.dealerHoleHidden = false;
-      t.phaseDeadline = null;
-      const anyLive = t.seats.some((s) => s.hands && s.hands.some((h) => h.status === "stood"));
-      if (anyLive) {
-        while (true) {
-          const { total, soft } = bjHandValue(t.dealer);
-          if (total > 21 || total > 17 || (total === 17 && (!soft || DEALER_STANDS_SOFT_17))) break;
-          t.dealer.push(shoe.draw());
-          await tref().set(t);
-          await delay(LIVE_BJ_DEAL_CARD_MS);
-        }
-      }
-      const dealerVal = bjHandValue(t.dealer).total;
-      const dealerBust = dealerVal > 21;
-      for (const seat of t.seats) {
-        if (seat.status !== "active") continue;
-        for (const hand of seat.hands) {
-          if (hand.result === "blackjack" || hand.result === "push" || hand.result === "surrender") { hand.status = "push"; continue; }
-          const val = bjHandValue(hand.cards).total;
-          let payout = 0;
-          if (hand.status === "bust") hand.result = "lose";
-          else if (dealerBust || val > dealerVal) { hand.result = "win"; payout = hand.bet * 2; }
-          else if (val === dealerVal) { hand.result = "push"; payout = hand.bet; }
-          else hand.result = "lose";
-          hand.profit = payout - hand.bet;
-        }
-        const mainResult = seat.hands[0].result;
-        for (const bb of seat.behindBets) {
-          bb.result = mainResult;
-          let bbPayout = 0;
-          if (mainResult === "win") bbPayout = bb.amount * 2;
-          else if (mainResult === "blackjack") bbPayout = Math.round(bb.amount * 2.5);
-          else if (mainResult === "push") bbPayout = bb.amount;
-          bb.profit = bbPayout - bb.amount;
-        }
-      }
-      t.phase = "settled";
-      await tref().set(t);
-      setTimeout(resetForNextRound, 4500);
-    }
-
-    // Deal/settlement math above runs on whichever single client's tick()
-    // happens to win the race — but Balance is a local, per-client thing
-    // (each player can only credit their own balance document), so that
-    // one client crediting payouts directly would only ever pay itself.
-    // Instead, every connected client runs this on every table update and
-    // claims only its own unpaid stake: its own hand(s), its own side
-    // bets, its own insurance, and any bets it placed behind other seats.
-    // The `paid`/`sideBetsPaid`/`insurancePaid` flags (claimed inside a
-    // transaction) make each unit payable exactly once no matter how many
-    // clients race to reconcile at the same time.
-    let reconcileBusy = false;
-    async function reconcileMyPayouts(t) {
-      if (reconcileBusy || !t) return;
-      const uid = myUid();
-      if (!uid) return;
-      const sideBetsReady = t.phase !== "betting" && t.phase !== "dealing" && t.phase !== "idle";
-      const insuranceReady = t.phase === "settled";
-      const looksUnpaid = t.seats.some((seat) => {
-        if (seat.uid === uid) {
-          if (seat.hands.some((h) => h.result != null && !h.paid)) return true;
-          if (sideBetsReady && !seat.sideBetsPaid && (seat.sideBets.perfectPairs > 0 || seat.sideBets.twentyPlusThree > 0)) return true;
-          if (insuranceReady && seat.insuranceBet > 0 && !seat.insurancePaid) return true;
-        }
-        return (seat.behindBets || []).some((bb) => bb.uid === uid && bb.result != null && !bb.paid);
-      });
-      if (!looksUnpaid) return;
-
-      reconcileBusy = true;
-      let totalPayout = 0;
-      try {
-        await getDb().runTransaction(async (tx) => {
-          totalPayout = 0;
-          const fresh = (await tx.get(tref())).data();
-          const freshSideBetsReady = fresh.phase !== "betting" && fresh.phase !== "dealing" && fresh.phase !== "idle";
-          const freshInsuranceReady = fresh.phase === "settled";
-          const dealerBJ = freshInsuranceReady && isBlackjack(fresh.dealer);
-          for (const seat of fresh.seats) {
-            if (seat.uid === uid) {
-              for (const h of seat.hands) {
-                if (h.result != null && !h.paid) {
-                  totalPayout += h.bet + (h.profit || 0);
-                  h.paid = true;
-                }
-              }
-              if (freshSideBetsReady && !seat.sideBetsPaid && (seat.sideBets.perfectPairs > 0 || seat.sideBets.twentyPlusThree > 0)) {
-                const pp = seat.sideBets.perfectPairs, tw = seat.sideBets.twentyPlusThree;
-                if (pp > 0 && seat.sideBetResults.perfectPairs) totalPayout += pp * SIDE_BET_PAYTABLES.perfectPairs[seat.sideBetResults.perfectPairs] + pp;
-                if (tw > 0 && seat.sideBetResults.twentyPlusThree) totalPayout += tw * SIDE_BET_PAYTABLES.twentyPlusThree[seat.sideBetResults.twentyPlusThree] + tw;
-                seat.sideBetsPaid = true;
-              }
-              if (freshInsuranceReady && seat.insuranceBet > 0 && !seat.insurancePaid) {
-                if (dealerBJ) totalPayout += seat.insuranceBet * 3;
-                seat.insurancePaid = true;
-              }
-            }
-            for (const bb of seat.behindBets || []) {
-              if (bb.uid === uid && bb.result != null && !bb.paid) {
-                totalPayout += bb.amount + (bb.profit || 0);
-                bb.paid = true;
-              }
-            }
-          }
-          tx.set(tref(), fresh);
-        });
-        if (totalPayout > 0) await Balance.applyDelta(totalPayout, "live_bj_payout");
-      } catch (e) { /* another write raced this one — the next snapshot will retry */ }
-      reconcileBusy = false;
-    }
-
-    async function resetForNextRound() {
-      await getDb().runTransaction(async (tx) => {
-        const t = (await tx.get(tref())).data();
-        if (t.phase !== "settled") return;
-        t.seats = t.seats.map((s) => s.uid ? { ...emptySeat(), uid: s.uid, name: s.name, status: "waiting", joinedAt: s.joinedAt, missedRounds: s.missedRounds || 0 } : s);
-        t.dealer = [];
-        t.dealerHoleHidden = true;
-        const stillOccupied = t.seats.some((s) => s.status !== "empty");
-        t.phase = stillOccupied ? "betting" : "idle";
-        t.phaseDeadline = stillOccupied ? Date.now() + LIVE_BJ_BETTING_MS : null;
-        t.turnSeatIndex = -1;
-        t.turnHandIndex = 0;
-        tx.set(tref(), t);
-      });
-    }
-
-    async function sendChat(text) {
-      text = (text || "").trim().slice(0, 240);
-      if (!text) return;
-      await chatRef().add({ uid: myUid(), name: localStorage.getItem(LS_HANDLE) || "Player", text, at: firebase.firestore.FieldValue.serverTimestamp() });
-    }
-
-    function ensureLiveStyle() {
-      if (document.getElementById("saltys-live-bj-style")) return;
-      const s = document.createElement("style");
-      s.id = "saltys-live-bj-style";
-      s.textContent = `
-        #${OVERLAY_ID} .lbj-oval-wrap{ position:relative; }
-        #${OVERLAY_ID} .lbj-oval-table{
-          position:relative; width:100%; max-width:900px; margin:0 auto; aspect-ratio:16/9;
-          background:
-            radial-gradient(ellipse at 50% 12%, rgba(255,255,255,.07), rgba(255,255,255,0) 32%),
-            radial-gradient(ellipse at 50% 100%, rgba(0,0,0,.35), rgba(0,0,0,0) 55%),
-            radial-gradient(ellipse at 50% 15%, var(--felt-line, #1c5c46), var(--felt, #0e3b2c) 72%);
-          border-radius:50%/45%; border:10px solid #2a1608;
-          outline:2px solid #4a2f14; outline-offset:-6px;
-          box-shadow:
-            inset 0 0 70px rgba(0,0,0,.55), inset 0 0 0 3px rgba(212,175,55,.12),
-            inset 0 0 0 13px rgba(74,47,20,.45), inset 0 0 0 15px rgba(0,0,0,.3),
-            0 10px 30px rgba(0,0,0,.35), 0 0 0 4px #1a0f05, 0 0 0 6px #3d2410;
-        }
-        #${OVERLAY_ID} .lbj-oval-dealer{ position:absolute; top:16%; left:50%; transform:translateX(-50%); display:flex; flex-direction:column; align-items:center; gap:4px; z-index:1; }
-        #${OVERLAY_ID} .lbj-oval-seats{ position:relative; margin-top:-40px; display:grid; grid-template-columns:repeat(5,1fr); gap:16px; padding:0 14px; }
-        #${OVERLAY_ID} .lbj-seat{
-          background:linear-gradient(180deg, rgba(28,34,44,.92), rgba(15,18,24,.92));
-          border:1px solid var(--border); border-radius:16px; padding:10px;
-          box-shadow:0 3px 10px rgba(0,0,0,.3);
-          transition:box-shadow .3s, transform .3s, border-color .15s;
-        }
-        #${OVERLAY_ID} .lbj-seat.drag-over{ border-color:var(--gold); box-shadow:0 0 0 2px rgba(212,175,55,.4); }
-        #${OVERLAY_ID} .lbj-seat.turn{ box-shadow:0 0 0 2px #d4af37, 0 0 18px rgba(212,175,55,.5); transform:translateY(-4px); }
-        #${OVERLAY_ID} .lbj-seat.win{ box-shadow:0 0 0 2px #2fbf71; }
-        #${OVERLAY_ID} .lbj-seat.lose{ opacity:.6; }
-        #${OVERLAY_ID} .lbj-behind-row{ display:flex; align-items:center; gap:4px; margin-top:6px; flex-wrap:wrap; }
-        #${OVERLAY_ID} .lbj-behind-avatar{ width:20px; height:20px; border-radius:50%; background:#7c3aed; color:#fff; font-size:10px; display:flex; align-items:center; justify-content:center; font-weight:700; border:1px solid #1a1400; }
-      `;
-      document.head.appendChild(s);
-    }
-
-    function cardEl(c, hidden) {
-      if (hidden) return `<div class="card back" data-key="hidden"></div>`;
-      const isNew = c._key != null && !dealtAnimated.has(c._key);
-      if (isNew) dealtAnimated.add(c._key);
-      return `<div class="card ${cardColor(c)} ${isNew ? "lbj-card-deal" : ""}" data-key="${c._key ?? ""}"><span>${c.r}</span><span class="br">${SUIT_GLYPH[c.s]}</span></div>`;
-    }
-    function secondsLeft() {
-      if (!tableDoc || !tableDoc.phaseDeadline) return null;
-      return Math.max(0, Math.ceil((tableDoc.phaseDeadline - Date.now()) / 1000));
-    }
-    // renderInner() only runs when Firestore actually pushes a new snapshot,
-    // so without this the on-screen "Xs" text just sits frozen between
-    // writes instead of counting down. This runs every second regardless,
-    // updating only the timer spans' text (by class, renderInner() already
-    // tags them "lbj-timer") so it doesn't disturb anything else — an
-    // in-progress chat message or bet amount the player is mid-typing.
-    function updateTimerDisplay() {
-      if (!root || !tableDoc) return;
-      const secs = secondsLeft();
-      const text = secs !== null ? `${secs}s` : "";
-      root.querySelectorAll(".lbj-timer").forEach((el) => { el.textContent = text; });
-    }
-    function missedWarningBadge(seat) {
-      if (!seat.missedRounds) return "";
-      const left = LIVE_BJ_KICK_AFTER_MISSES - seat.missedRounds;
-      if (left <= 0) return "";
-      return `<span class="pill lose" title="Kicked if you miss betting again">No bet: ${left} left</span>`;
-    }
-
-    function seatHtml(seat, i) {
-      if (seat.status === "empty") {
-        return `<div class="lbj-seat center col" data-drop-seat="${i}"><div class="muted">Seat ${i + 1}</div><button class="btn small primary" data-join="${i}">Sit here</button></div>`;
-      }
-      const mine = seat.uid === myUid();
-      const isTurn = tableDoc.turnSeatIndex === i;
-      const mainResult = seat.hands[0] && seat.hands[0].result;
-      const stateClass = isTurn ? "turn" : mainResult === "win" || mainResult === "blackjack" ? "win" : mainResult === "lose" ? "lose" : "";
-      const sideChips = [];
-      if (seat.sideBets && seat.sideBets.perfectPairs > 0) {
-        const r = seat.sideBetResults && seat.sideBetResults.perfectPairs;
-        sideChips.push(`<div class="lbj-sidebet-chip ${r ? "hit" : ""}" title="Perfect Pairs: ${fmt(seat.sideBets.perfectPairs)}${r ? " · " + r : ""}"><span class="lbj-sidebet-label">PP</span><span class="lbj-sidebet-amt">${fmt(seat.sideBets.perfectPairs)}</span></div>`);
-      }
-      if (seat.sideBets && seat.sideBets.twentyPlusThree > 0) {
-        const r = seat.sideBetResults && seat.sideBetResults.twentyPlusThree;
-        sideChips.push(`<div class="lbj-sidebet-chip ${r ? "hit" : ""}" title="21+3: ${fmt(seat.sideBets.twentyPlusThree)}${r ? " · " + r : ""}"><span class="lbj-sidebet-label">21+3</span><span class="lbj-sidebet-amt">${fmt(seat.sideBets.twentyPlusThree)}</span></div>`);
-      }
-      const sideBetHtml = sideChips.length ? `<div class="lbj-sidebet-strip">${sideChips.join("")}</div>` : "";
-      const handsHtml = seat.hands.length ? seat.hands.map((hand, hi) => {
-        const active = tableDoc.phase === "player-turns" && i === tableDoc.turnSeatIndex && hi === tableDoc.turnHandIndex;
-        const v = bjHandValue(hand.cards);
-        const label = hand.status === "bust" ? `${v.total} Bust` : hand.cards.length ? `${v.total}${v.soft ? "s" : ""}` : "";
-        const resultBadge = hand.result ? `<span class="pill ${hand.profit > 0 ? "win" : hand.profit < 0 ? "lose" : ""}">${hand.result}${hand.profit != null ? " " + (hand.profit >= 0 ? "+" : "") + fmt(hand.profit) : ""}</span>` : "";
-        return `<div class="col" style="opacity:${active ? 1 : 0.75}">
-          <div class="hand">${hand.cards.map((c) => cardEl(c, false)).join("")}</div>
-          <div class="row" style="justify-content:space-between;align-items:center">
-            <div class="row" style="align-items:center;gap:8px">${chipStackHtml(hand.bet, { size: 18 })}<span class="muted" style="font-size:11px">${label}</span></div>
-            ${resultBadge}
-          </div>
-        </div>`;
-      }).join("") : "";
-      const behindTotal = seat.behindBets.reduce((s, b) => s + b.amount, 0);
-      const behindHtml = seat.behindBets.length ? `<div class="lbj-behind-row">${seat.behindBets.map((b) => `<div class="lbj-behind-avatar" title="${b.name}: ${fmt(b.amount)}${b.result ? " · " + b.result : ""}">${b.name[0]}</div>`).join("")}<span class="muted" style="font-size:11px">${fmt(behindTotal)} behind</span></div>` : "";
-      const canBetBehind = !mine && seat.status !== "empty" && tableDoc.phase === "betting" && !seat.behindBets.some((b) => b.uid === myUid());
-      const betTooHigh = (myPendingBet + myPendingPP + myPending213) > Balance.current;
-      const dealerShowsAce = tableDoc.dealer && tableDoc.dealer[0] && tableDoc.dealer[0].r === "A";
-      const canInsure = mine && dealerShowsAce && tableDoc.phase === "insurance" && (seat.insuranceBet || 0) === 0 && !seat.insuranceDeclined;
-      const tier = tierForTable(tableId);
-      return `<div class="lbj-seat col ${stateClass}" data-drop-seat="${i}">
-        <div class="row" style="justify-content:space-between"><span class="muted">Seat ${i + 1} · ${seat.name || ""}</span>${mine ? '<span class="pill">You</span>' : ""}${missedWarningBadge(seat)}</div>
-        ${handsHtml || `<div class="muted center">Waiting to bet</div>`}
-        ${sideBetHtml}
-        ${behindHtml}
-        ${canInsure ? `<div class="row mt8" style="justify-content:center;gap:6px"><span class="muted">Insurance?</span><button class="btn small gold" data-insure="${i}">Insure ${fmt(Math.round((seat.hands[0]?.bet || 0) / 2))}</button><button class="btn small" data-decline-insure="${i}">No</button></div>` : ""}
-        ${seat.insuranceBet > 0 ? `<div class="muted center" style="font-size:11px">Insured ${fmt(seat.insuranceBet)}</div>` : ""}
-        ${mine && seat.status === "waiting" ? `
-          <div class="col mt8">
-            <div class="row" style="justify-content:space-between;align-items:center">
-              <span class="muted">Main bet</span>
-              ${myPendingBet > 0 ? chipStackHtml(myPendingBet, { size: 16 }) : ""}
-            </div>
-            <div class="muted" style="font-size:11px;margin-bottom:2px">Table limits: ${fmt(tier.minBet)}&ndash;${fmt(tier.maxBet)}</div>
-            ${renderBetControls(`lbj-main-${i}`, myPendingBet, false)}
-            <div class="lbj-sidebet-row">
-              <input type="text" id="lbj-pp-${i}" placeholder="Pairs (e.g. 100k)" value="${myPendingPP ? fmt(myPendingPP) : ""}">
-              <input type="text" id="lbj-213-${i}" placeholder="21+3 (e.g. 1m)" value="${myPending213 ? fmt(myPending213) : ""}">
-            </div>
-            <div class="row">
-              <button class="btn small primary" data-bet="${i}" ${betTooHigh || myPendingBet < MIN_BET ? "disabled" : ""} title="${betTooHigh ? "Not enough balance for that bet" : ""}">Bet</button>
-              <button class="btn small" data-leave="${i}">Leave</button>
-            </div>
-          </div>` : ""}
-        ${canBetBehind ? `
-          <div class="col mt8">
-            ${renderBetControls(`lbj-behind-${i}`, myPendingBehind, false)}
-            <button class="btn small gold" data-behind="${i}" ${myPendingBehind > Balance.current ? "disabled" : ""} title="${myPendingBehind > Balance.current ? "Not enough balance" : ""}">Bet behind</button>
-          </div>` : ""}
-      </div>`;
-    }
-
-    function renderInner() {
-      if (!root || !tableDoc) return;
-      ensureLiveStyle();
-      ensureBlackjackSharedStyle();
-      const cardCount = tableDoc.dealer.length + tableDoc.seats.reduce((s, seat) => s + seat.hands.reduce((s2, h) => s2 + h.cards.length, 0), 0);
-      if (lastCardCount >= 0 && cardCount > lastCardCount) playDealSound();
-      lastCardCount = cardCount;
-      const dealerHtml = tableDoc.dealer.map((c, i) => cardEl(c, i > 0 && tableDoc.dealerHoleHidden)).join("");
-      const seatsHtml = tableDoc.seats.map((s, i) => seatHtml(s, i)).join("");
-      const seat = tableDoc.seats[mySeatIndex];
-      const hand = seat && seat.hands && seat.hands[tableDoc.turnHandIndex];
-      const myTurn = tableDoc.phase === "player-turns" && tableDoc.turnSeatIndex === mySeatIndex;
-      const canDouble = myTurn && hand && hand.cards.length === 2 && Balance.current >= hand.bet;
-      const canSplit = myTurn && hand && hand.cards.length === 2 && isSplittablePair(hand.cards[0], hand.cards[1]) && seat.hands.length <= LIVE_BJ_MAX_SPLITS;
-      const canSurrender = myTurn && hand && hand.cards.length === 2 && !hand.acted && !hand.fromSplit;
-      const secs = secondsLeft();
-      const timerHtml = secs !== null ? `<span class="lbj-timer">${secs}s</span>` : "";
-      let statusLine;
-      if (tableDoc.phase === "idle") statusLine = "Table idle — sit down to start a round";
-      else if (tableDoc.phase === "betting") statusLine = `Betting closes in ${timerHtml}`;
-      else if (tableDoc.phase === "insurance") statusLine = `Dealer shows an Ace — insurance? ${timerHtml}`;
-      else if (tableDoc.phase === "player-turns") statusLine = myTurn ? `Your move — ${timerHtml}` : `Waiting on seat ${tableDoc.turnSeatIndex + 1} — ${timerHtml}`;
-      else statusLine = tableDoc.phase;
-
-      const controls = myTurn ? `<div class="row center">
-        <button class="btn primary" data-act="hit">Hit</button>
-        <button class="btn" data-act="stand">Stand</button>
-        <button class="btn" ${!canDouble ? "disabled" : ""} data-act="double" title="${!canDouble && hand && Balance.current < hand.bet ? "Not enough balance to double" : ""}">Double</button>
-        <button class="btn" ${!canSplit ? "disabled" : ""} data-act="split">Split</button>
-        <button class="btn" ${!canSurrender ? "disabled" : ""} data-act="surrender" title="Forfeit the hand, get half your bet back">Surrender</button>
-      </div>` : `<div class="center muted">${statusLine}</div>`;
-
-      const chatHtml = chatMessages.map((m) => `<div class="muted"><b>${m.name}</b>: ${m.text}</div>`).join("");
-
-      const tier = tierForTable(tableId);
-      root.innerHTML = `
-        <div class="row" style="justify-content:space-between;align-items:center">
-          <div class="row" style="gap:8px;align-items:center">
-            <span class="pill tier-${tier.key}">${tier.label}</span>
-            <span class="muted" style="font-size:12px">Limits: ${fmt(tier.minBet)} &ndash; ${fmt(tier.maxBet)}</span>
-          </div>
-          <div class="row" style="gap:10px;align-items:center">
-            <span class="muted">${statusLine}</span>
-            <button class="btn small" id="saltys-bj-rules-btn">📖 House Rules</button>
-          </div>
-        </div>
-        <div class="lbj-oval-wrap mt8">
-          <div class="lbj-oval-table">
-            ${tableBannerHtml()}
-            ${shoeDecorHtml()}
-            <div class="lbj-oval-dealer">
-              <div class="ov-dealer-hand" style="justify-content:center">${dealerHtml}</div>
-              <div class="ov-dealer-label">Dealer's Cards</div>
-            </div>
-            ${tableDoc.phase === "idle" ? '<div class="ov-hint">Click a seat to play that hand</div>' : ""}
-          </div>
-          <div class="lbj-oval-seats">${seatsHtml}</div>
-        </div>
-        <div class="mt16">${myTurn ? controls : ""}</div>
-        <div class="panel mt16 col" style="max-height:140px;overflow:auto">${chatHtml}</div>
-        <div class="row mt8"><input type="text" id="lbj-chat-input" placeholder="Say something…" style="flex:1"><button class="btn small" id="lbj-chat-send">Send</button></div>
-      `;
-
-      root.querySelectorAll("[data-join]").forEach((b) => b.addEventListener("click", () => joinSeat(parseInt(b.dataset.join, 10))));
-      root.querySelectorAll("[data-leave]").forEach((b) => b.addEventListener("click", leaveSeat));
-      root.querySelectorAll("[data-bet]").forEach((b) => b.addEventListener("click", () => placeBet(myPendingBet, myPendingPP, myPending213)));
-      root.querySelectorAll("[data-behind]").forEach((b) => b.addEventListener("click", () => betBehind(parseInt(b.dataset.behind, 10), myPendingBehind)));
-      root.querySelectorAll("[data-insure]").forEach((b) => b.addEventListener("click", () => takeInsurance(parseInt(b.dataset.insure, 10))));
-      root.querySelectorAll("[data-decline-insure]").forEach((b) => b.addEventListener("click", () => declineInsurance(parseInt(b.dataset.declineInsure, 10))));
-      wireRulesButton(root);
-      wireSoundToggle(root, renderInner);
-      if (myTurn) root.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => act(b.dataset.act)));
-
-      tableDoc.seats.forEach((seatX, i) => {
-        if (seatX.status === "waiting" && seatX.uid === myUid()) {
-          wireBetControls(root, `lbj-main-${i}`, () => myPendingBet, (v) => { myPendingBet = v; renderInner(); });
-          const ppInput = root.querySelector(`#lbj-pp-${i}`);
-          if (ppInput) ppInput.addEventListener("change", (e) => {
-            const parsed = parseAmount(e.target.value);
-            myPendingPP = !isNaN(parsed) ? clamp(parsed, 0, MAX_BET) : 0;
-            renderInner();
-          });
-          const t213Input = root.querySelector(`#lbj-213-${i}`);
-          if (t213Input) t213Input.addEventListener("change", (e) => {
-            const parsed = parseAmount(e.target.value);
-            myPending213 = !isNaN(parsed) ? clamp(parsed, 0, MAX_BET) : 0;
-            renderInner();
-          });
-        }
-        if (seatX.status !== "empty" && seatX.uid !== myUid()) {
-          wireBetControls(root, `lbj-behind-${i}`, () => myPendingBehind, (v) => { myPendingBehind = v; renderInner(); });
-        }
-      });
-
-      const sendBtn = root.querySelector("#lbj-chat-send");
-      const chatInput = root.querySelector("#lbj-chat-input");
-      if (sendBtn && chatInput) {
-        sendBtn.addEventListener("click", () => { sendChat(chatInput.value); chatInput.value = ""; });
-        chatInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { sendChat(chatInput.value); chatInput.value = ""; } });
-      }
-    }
-
-    return {
-      setTable,
-      async mount(el) {
-        root = el;
-        if (!isFirebaseConfigured()) { root.innerHTML = `<div class="table-surface center muted">Live tables require Firebase to be configured.</div>`; return () => {}; }
-        root.innerHTML = `<div class="table-surface center muted">Connecting…</div>`;
-        const u = await getAuthReady();
-        if (!u || !isFirebaseConfigured()) {
-          root.innerHTML = `<div class="table-surface center muted">Couldn't connect to live tables (Firebase auth unavailable). Check the console for details, or play Solo instead.</div>`;
-          return () => { root = null; };
-        }
-        try { await ensureTableDoc(); }
-        catch (e) {
-          root.innerHTML = `<div class="table-surface center muted">Failed to load table: ${e.message || e}</div>`;
-          return () => { root = null; };
-        }
-        unsubTable = tref().onSnapshot((snap) => {
-          tableDoc = snap.data();
-          renderInner();
-          reconcileMyPayouts(tableDoc).catch(() => {});
-        });
-        unsubChat = chatRef().orderBy("at", "desc").limit(30).onSnapshot((qs) => { chatMessages = qs.docs.map((d) => d.data()).reverse(); renderInner(); });
-        tickTimer = setInterval(() => { tick(); updateTimerDisplay(); }, 1000);
-        return () => { if (unsubTable) unsubTable(); if (unsubChat) unsubChat(); if (tickTimer) clearInterval(tickTimer); root = null; };
-      },
-    };
-  })();
-
-  GAME_MODULES.blackjack = BlackjackHub;
+  window.SaltyCore.GAME_MODULES.blackjack = SoloBlackjackMulti;
 })();

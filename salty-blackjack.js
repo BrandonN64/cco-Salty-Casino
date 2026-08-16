@@ -24,6 +24,15 @@
 // ~1 in 84 hands it's far too common for a jackpot (that's ordinary
 // side-bet rarity, not jackpot rarity) — a suited three-of-a-kind is
 // roughly 1 in 4,800 hands, which actually earns the name.
+//
+// NOTE (CSS): the shared casino-chrome classes this file used to define
+// (.chip-stack-*, .ov-bet-rail, .ov-bet-spot*, .ov-chip-rail, .ov-banner*,
+// .ov-corner-deco*, .ov-mini-card, .ov-discard-tray) have been moved into
+// salty-core.js's ensureStyle(), since Baccarat and Mines render markup
+// using those exact classnames too but never defined them themselves —
+// they only worked after visiting Blackjack once, which is what injected
+// this style block. Only genuinely Blackjack-only classes (lbj-*, sbj-*,
+// the House Rules modal) remain here now.
 // ==/UserScript==
 (function () {
   "use strict";
@@ -231,7 +240,6 @@
       src.start(startAt);
       src.stop(startAt + durSec + 0.01);
     }
-
     fireLayer(now, 0.012, "highpass", 4500, 4500, 0.4, 0);
     fireLayer(now + 0.006, 0.05, "bandpass", 3200, 1400, 0.22, 0.008);
     fireLayer(now + 0.04, 0.02, "lowpass", 900, 900, 0.18, 0);
@@ -244,6 +252,14 @@
     if (btn) btn.addEventListener("click", () => { setSoundEnabled(!soundEnabled()); renderFn(); });
   }
 
+  // -----------------------------------------------------------------------
+  // Only genuinely Blackjack-only classes live here now: lbj-* (side-bet
+  // chips, deal animation, timer), sbj-* (this module's own jackpot spot/
+  // banner naming), and the #saltys-bj-rules modal. Everything shared with
+  // Baccarat/Mines (chip-stack-*, ov-bet-rail, ov-bet-spot*, ov-chip-rail,
+  // ov-banner*, ov-corner-deco*, ov-mini-card, ov-discard-tray) moved to
+  // salty-core.js's ensureStyle() — see the NOTE at the top of this file.
+  // -----------------------------------------------------------------------
   function ensureBlackjackSharedStyle() {
     if (document.getElementById("saltys-bj-shared-style")) return;
     const s = document.createElement("style");
@@ -270,38 +286,6 @@
       #${OVERLAY_ID} .lbj-sidebet-label{ font-size:8px; font-weight:800; color:#fff; text-transform:uppercase; letter-spacing:.3px; text-shadow:0 1px 2px rgba(0,0,0,.7); }
       #${OVERLAY_ID} .lbj-sidebet-amt{ font:700 8px/1.2 "JetBrains Mono",monospace; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,.7); }
 
-      #${OVERLAY_ID} .chip-stack-wrap{ display:flex; flex-direction:column; align-items:center; gap:4px; }
-      #${OVERLAY_ID} .chip-stack-discs{ display:flex; flex-direction:row; align-items:center; }
-      #${OVERLAY_ID} .chip-stack-disc{ border-radius:50%; border:2px solid #1a1400; flex-shrink:0; box-shadow:0 2px 4px rgba(0,0,0,.5), inset 0 0 0 2px rgba(255,255,255,.12); }
-      #${OVERLAY_ID} .chip-stack-label{ font:700 11px/1 "JetBrains Mono",monospace; color:var(--gold-bright); text-shadow:0 1px 3px rgba(0,0,0,.8); white-space:nowrap; }
-
-      #${OVERLAY_ID} .ov-bet-rail{
-        display:flex; justify-content:center; align-items:flex-end; gap:22px; flex-wrap:wrap;
-        margin:-22px auto 0; padding:16px 20px 10px; max-width:640px; position:relative; z-index:1;
-        background:radial-gradient(ellipse at 50% 0%, rgba(20,60,44,.92), rgba(9,30,22,.88) 75%);
-        border:1px solid rgba(212,175,55,.18); border-top:none; border-radius:0 0 32px 32px;
-        box-shadow:inset 0 8px 16px -8px rgba(0,0,0,.5);
-      }
-      #${OVERLAY_ID} .ov-bet-spot{
-        position:relative; border-radius:50%; flex:none; cursor:pointer;
-        background:radial-gradient(circle at 50% 40%, #10261c, #0b1a13 75%);
-        border:2px dashed var(--gold); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
-        transition:box-shadow .15s ease, border-color .15s ease, transform .15s ease;
-      }
-      #${OVERLAY_ID} .ov-bet-spot.active{
-        border-style:solid; border-color:var(--gold-bright); transform:translateY(-3px);
-        box-shadow:0 0 0 3px rgba(212,175,55,.3), 0 0 18px rgba(212,175,55,.4);
-      }
-      #${OVERLAY_ID} .ov-bet-spot.drag-over{ box-shadow:0 0 0 4px rgba(212,175,55,.55); }
-      #${OVERLAY_ID} .ov-bet-spot-ring{ position:absolute; inset:6px; border-radius:50%; border:1px solid rgba(212,175,55,.25); pointer-events:none; }
-      #${OVERLAY_ID} .ov-bet-spot-label{ font:700 9px/1 "Oswald",sans-serif; text-transform:uppercase; letter-spacing:.5px; color:var(--text-dim); pointer-events:none; }
-      #${OVERLAY_ID} .ov-bet-spot-amt{ font:700 11px/1.2 "JetBrains Mono",monospace; color:var(--gold-bright); pointer-events:none; }
-      #${OVERLAY_ID} .ov-chip-rail{
-        margin:10px auto 0; padding:14px 16px; max-width:640px; border-radius:14px;
-        background:linear-gradient(180deg, #2a1608, #1a0f05); border:1px solid #4a2f14;
-        box-shadow:inset 0 2px 8px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.3);
-      }
-
       #${OVERLAY_ID} .sbj-jackpot-spot{
         position:relative; width:92px; height:92px; border-radius:50%; cursor:pointer;
         background:radial-gradient(circle at 50% 35%, rgba(124,58,237,.3), #10261c 75%);
@@ -311,32 +295,11 @@
       #${OVERLAY_ID} .sbj-jackpot-spot.active{ border-style:solid; border-color:var(--purple-bright); transform:translateY(-3px); box-shadow:0 0 0 3px rgba(124,58,237,.4); }
       #${OVERLAY_ID} .sbj-jackpot-spot .ov-bet-spot-label{ color:var(--purple-bright); }
       #${OVERLAY_ID} .sbj-jackpot-sub{ font:600 8px/1.2 "JetBrains Mono",monospace; color:var(--text-dim); text-align:center; padding:0 6px; }
-
       #${OVERLAY_ID} .sbj-jackpot-banner{
         text-align:center; font:800 20px/1 "Oswald",sans-serif; letter-spacing:1px; color:var(--gold-bright);
         text-shadow:0 0 14px rgba(244,207,101,.5); margin-bottom:8px; transition:transform .15s ease;
       }
       #${OVERLAY_ID} .sbj-jackpot-banner.pulse{ transform:scale(1.06); }
-
-      #${OVERLAY_ID} .ov-banner{ position:absolute; top:0.5%; left:50%; transform:translateX(-50%); width:46%; max-width:360px; pointer-events:none; z-index:0; }
-      #${OVERLAY_ID} .ov-banner-main{ font:800 18px/1 "Oswald",sans-serif; letter-spacing:1.5px; fill:rgba(244,207,101,.5); }
-      #${OVERLAY_ID} .ov-banner-sub, #${OVERLAY_ID} .ov-banner-sub2{
-        position:absolute; left:50%; transform:translateX(-50%); width:70%; text-align:center;
-        font:700 8px/1.3 "Oswald",sans-serif; letter-spacing:.6px; text-transform:uppercase;
-        color:rgba(244,207,101,.4); pointer-events:none; z-index:0; white-space:nowrap;
-      }
-      #${OVERLAY_ID} .ov-banner-sub{ top:8.5%; }
-      #${OVERLAY_ID} .ov-banner-sub2{ top:10.8%; }
-
-      #${OVERLAY_ID} .ov-corner-deco{ position:absolute; top:3%; display:flex; align-items:center; z-index:0; opacity:.9; }
-      #${OVERLAY_ID} .ov-corner-left{ left:3%; }
-      #${OVERLAY_ID} .ov-corner-right{ right:3%; }
-      #${OVERLAY_ID} .ov-mini-card{ width:34px; height:48px; border-radius:4px; box-shadow:0 2px 5px rgba(0,0,0,.5); }
-      #${OVERLAY_ID} .ov-discard-tray{
-        width:52px; height:38px; border-radius:6px; border:2px solid rgba(74,47,20,.9);
-        background:linear-gradient(180deg, rgba(0,0,0,.25), rgba(0,0,0,.1));
-        box-shadow:inset 0 2px 6px rgba(0,0,0,.5);
-      }
 
       #saltys-bj-rules{
         position:fixed; inset:0; z-index:100002; display:flex; align-items:center; justify-content:center;

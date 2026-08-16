@@ -235,7 +235,7 @@
     if (!soundEnabled()) return;
     const ctx = getAudioCtx();
     if (!ctx) return;
-    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    if (ctx.state === "suspended") ctx.resume().catch(() => { });
     const now = ctx.currentTime;
     function noiseBuffer(durSec) {
       const buf = ctx.createBuffer(1, Math.max(1, Math.floor(ctx.sampleRate * durSec)), ctx.sampleRate);
@@ -604,8 +604,8 @@
             render();
           }
         };
-        corner.addEventListener("pointerdown", (e) => { dragging = true; startX = e.clientX; corner.setPointerCapture(e.pointerId); });
-        corner.addEventListener("pointermove", (e) => {
+        wrap.addEventListener("pointerdown", (e) => { dragging = true; startX = e.clientX; wrap.setPointerCapture(e.pointerId); });
+        wrap.addEventListener("pointermove", (e) => {
           if (!dragging) return;
           const pct = Math.min(1, Math.max(0, e.clientX - startX) / maxDragPx);
           setAngle(pct * 180);
@@ -616,9 +616,10 @@
           const pct = Math.min(1, Math.max(0, e.clientX - startX) / maxDragPx);
           commit(pct >= 0.55);
         };
-        corner.addEventListener("pointerup", endDrag);
-        corner.addEventListener("pointercancel", endDrag);
-        corner.addEventListener("dblclick", () => commit(true));
+        wrap.addEventListener("pointerup", endDrag);
+        wrap.addEventListener("pointercancel", endDrag);
+        wrap.addEventListener("dblclick", () => commit(true));
+        wrap.addEventListener("click", () => { if (!dragging) commit(true); });
       });
     }
 
@@ -635,9 +636,14 @@
 
     function renderTable() {
       const faceDown = (state.phase === "revealing" || state.phase === "dealing") ? faceDownEnabled() : false;
-      const showTotals = state.phase === "settled" || !faceDownEnabled();
-      const playerLabel = showTotals ? `${state.playerTotal}${state.playerNatural ? " ★" : ""}` : "?";
-      const bankerLabel = showTotals ? `${state.bankerTotal}${state.bankerNatural ? " ★" : ""}` : "?";
+      const playerRevealed = state.player.filter((c) => state.revealedKeys.has(c.key));
+      const bankerRevealed = state.banker.filter((c) => state.revealedKeys.has(c.key));
+      const playerLabel = playerRevealed.length
+        ? `${bacHandTotal(playerRevealed)}${state.phase === "settled" && state.playerNatural ? " ★" : ""}`
+        : "?";
+      const bankerLabel = bankerRevealed.length
+        ? `${bacHandTotal(bankerRevealed)}${state.phase === "settled" && state.bankerNatural ? " ★" : ""}`
+        : "?";
 
       const resultHtml = state.phase === "settled" && state.lastResult ? (() => {
         const r = state.lastResult;
@@ -645,13 +651,13 @@
         const headline = r.totalProfit > 0 ? "You Win" : r.totalProfit < 0 ? "You Lose" : "Push";
         const line = (label, amt) => `<div class="ov-summary-line"><span>${label}</span><span class="${amt > 0 ? "win" : amt < 0 ? "lose" : ""}">${amt >= 0 ? "+" : ""}${fmt(amt)}</span></div>`;
         return `<div class="ov-round-summary ${cls}">
-          <div class="ov-round-summary-headline">${headline} — ${state.winner.toUpperCase()}</div>
-          <div class="ov-round-summary-lines">
-            ${r.lines.map(([label, amt]) => line(label, amt)).join("")}
-            ${r.jackpotPayout > 0 ? line(`Progressive Jackpot (${r.jackpotTier})`, r.jackpotPayout) : ""}
-            <div class="ov-summary-line total"><span>Total</span><span>${r.totalProfit >= 0 ? "+" : ""}${fmt(r.totalProfit)}</span></div>
-          </div>
-        </div>`;
+      <div class="ov-round-summary-headline">${headline} — ${state.winner.toUpperCase()}</div>
+      <div class="ov-round-summary-lines">
+        ${r.lines.map(([label, amt]) => line(label, amt)).join("")}
+        ${r.jackpotPayout > 0 ? line(`Progressive Jackpot (${r.jackpotTier})`, r.jackpotPayout) : ""}
+        <div class="ov-summary-line total"><span>Total</span><span>${r.totalProfit >= 0 ? "+" : ""}${fmt(r.totalProfit)}</span></div>
+      </div>
+    </div>`;
       })() : "";
 
       const revealBtn = state.phase === "revealing" ? `<div class="row center mt8"><button class="btn small gold" id="bac-reveal-all">Reveal All</button></div>` : "";
@@ -663,12 +669,12 @@
             <div class="bac-hand">
               <div class="bac-hand-label">Player</div>
               <div class="bac-hand-cards">${state.player.map((c) => cardEl(c, false, faceDown)).join("")}</div>
-              <div class="bac-hand-total ${showTotals ? "" : "hidden-total"}">${playerLabel}</div>
+              <div class="bac-hand-total ${playerRevealed.length ? "" : "hidden-total"}">${playerLabel}</div>
             </div>
             <div class="bac-hand">
               <div class="bac-hand-label">Banker</div>
               <div class="bac-hand-cards">${state.banker.map((c) => cardEl(c, false, faceDown)).join("")}</div>
-              <div class="bac-hand-total ${showTotals ? "" : "hidden-total"}">${bankerLabel}</div>
+              <div class="bac-hand-total ${bankerRevealed.length ? "" : "hidden-total"}">${bankerLabel}</div>
             </div>
           </div>
           ${revealBtn}

@@ -18,6 +18,15 @@
 // modules must read them via SaltyCore.getDb() / getUid() / getAuthReady()
 // / isFirebaseConfigured() — NOT by destructuring them at load time —
 // since destructuring would freeze in the pre-init null/false values.
+//
+// NOTE (CSS): the shared casino-chrome classes below (.chip-stack-*,
+// .ov-bet-rail, .ov-bet-spot*, .ov-chip-rail, .ov-banner*, .ov-corner-deco*,
+// .ov-mini-card, .ov-discard-tray) used to live inside salty-blackjack.js's
+// own style injector. Baccarat and Mines both render markup using those
+// exact classnames too, but never defined them themselves — they only
+// rendered correctly after visiting Blackjack once, which is what injected
+// that style block. They now live here instead, so they're guaranteed
+// present regardless of which tab loads first.
 // ==/UserScript==
 (function () {
   "use strict";
@@ -883,6 +892,63 @@
         text-align:center; margin-top:16px; padding:12px; background:var(--panel); border:1px solid var(--gold);
         border-radius:12px; max-width:320px; margin-left:auto; margin-right:auto;
       }
+
+      /* --- shared casino chrome (moved here from salty-blackjack.js —
+         Baccarat and Mines both render markup using these same classes but
+         never defined them themselves, so they only worked after visiting
+         Blackjack once) --- */
+      #${OVERLAY_ID} .chip-stack-wrap{ display:flex; flex-direction:column; align-items:center; gap:4px; }
+      #${OVERLAY_ID} .chip-stack-discs{ display:flex; flex-direction:row; align-items:center; }
+      #${OVERLAY_ID} .chip-stack-disc{ border-radius:50%; border:2px solid #1a1400; flex-shrink:0; box-shadow:0 2px 4px rgba(0,0,0,.5), inset 0 0 0 2px rgba(255,255,255,.12); }
+      #${OVERLAY_ID} .chip-stack-label{ font:700 11px/1 "JetBrains Mono",monospace; color:var(--gold-bright); text-shadow:0 1px 3px rgba(0,0,0,.8); white-space:nowrap; }
+
+      #${OVERLAY_ID} .ov-bet-rail{
+        display:flex; justify-content:center; align-items:flex-end; gap:22px; flex-wrap:wrap;
+        margin:-22px auto 0; padding:16px 20px 10px; max-width:640px; position:relative; z-index:1;
+        background:radial-gradient(ellipse at 50% 0%, rgba(20,60,44,.92), rgba(9,30,22,.88) 75%);
+        border:1px solid rgba(212,175,55,.18); border-top:none; border-radius:0 0 32px 32px;
+        box-shadow:inset 0 8px 16px -8px rgba(0,0,0,.5);
+      }
+      #${OVERLAY_ID} .ov-bet-spot{
+        position:relative; border-radius:50%; flex:none; cursor:pointer;
+        background:radial-gradient(circle at 50% 40%, #10261c, #0b1a13 75%);
+        border:2px dashed var(--gold); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+        transition:box-shadow .15s ease, border-color .15s ease, transform .15s ease;
+      }
+      #${OVERLAY_ID} .ov-bet-spot.active{
+        border-style:solid; border-color:var(--gold-bright); transform:translateY(-3px);
+        box-shadow:0 0 0 3px rgba(212,175,55,.3), 0 0 18px rgba(212,175,55,.4);
+      }
+      #${OVERLAY_ID} .ov-bet-spot.drag-over{ box-shadow:0 0 0 4px rgba(212,175,55,.55); }
+      #${OVERLAY_ID} .ov-bet-spot-ring{ position:absolute; inset:6px; border-radius:50%; border:1px solid rgba(212,175,55,.25); pointer-events:none; }
+      #${OVERLAY_ID} .ov-bet-spot-label{ font:700 9px/1 "Oswald",sans-serif; text-transform:uppercase; letter-spacing:.5px; color:var(--text-dim); pointer-events:none; }
+      #${OVERLAY_ID} .ov-bet-spot-amt{ font:700 11px/1.2 "JetBrains Mono",monospace; color:var(--gold-bright); pointer-events:none; }
+      #${OVERLAY_ID} .ov-chip-rail{
+        margin:10px auto 0; padding:14px 16px; max-width:640px; border-radius:14px;
+        background:linear-gradient(180deg, #2a1608, #1a0f05); border:1px solid #4a2f14;
+        box-shadow:inset 0 2px 8px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.3);
+      }
+
+      #${OVERLAY_ID} .ov-banner{ position:absolute; top:0.5%; left:50%; transform:translateX(-50%); width:46%; max-width:360px; pointer-events:none; z-index:0; }
+      #${OVERLAY_ID} .ov-banner-main{ font:800 18px/1 "Oswald",sans-serif; letter-spacing:1.5px; fill:rgba(244,207,101,.5); }
+      #${OVERLAY_ID} .ov-banner-sub, #${OVERLAY_ID} .ov-banner-sub2{
+        position:absolute; left:50%; transform:translateX(-50%); width:70%; text-align:center;
+        font:700 8px/1.3 "Oswald",sans-serif; letter-spacing:.6px; text-transform:uppercase;
+        color:rgba(244,207,101,.4); pointer-events:none; z-index:0; white-space:nowrap;
+      }
+      #${OVERLAY_ID} .ov-banner-sub{ top:8.5%; }
+      #${OVERLAY_ID} .ov-banner-sub2{ top:10.8%; }
+
+      #${OVERLAY_ID} .ov-corner-deco{ position:absolute; top:3%; display:flex; align-items:center; z-index:0; opacity:.9; }
+      #${OVERLAY_ID} .ov-corner-left{ left:3%; }
+      #${OVERLAY_ID} .ov-corner-right{ right:3%; }
+      #${OVERLAY_ID} .ov-mini-card{ width:34px; height:48px; border-radius:4px; box-shadow:0 2px 5px rgba(0,0,0,.5); }
+      #${OVERLAY_ID} .ov-discard-tray{
+        width:52px; height:38px; border-radius:6px; border:2px solid rgba(74,47,20,.9);
+        background:linear-gradient(180deg, rgba(0,0,0,.25), rgba(0,0,0,.1));
+        box-shadow:inset 0 2px 6px rgba(0,0,0,.5);
+      }
+
       #${LAUNCH_ID}{
         position:fixed; left:16px; bottom:16px; z-index:99998;
         display:none; padding:10px 14px; border:none; border-radius:10px;

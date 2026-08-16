@@ -56,11 +56,11 @@
     try {
       const raw = localStorage.getItem(LS_KEY);
       if (raw) return JSON.parse(raw);
-    } catch (e) {}
+    } catch (e) { }
     return { amount: SEED_AMOUNT };
   }
   function writeLocal(pool) {
-    try { localStorage.setItem(LS_KEY, JSON.stringify(pool)); } catch (e) {}
+    try { localStorage.setItem(LS_KEY, JSON.stringify(pool)); } catch (e) { }
   }
 
   const listeners = new Set();
@@ -120,6 +120,7 @@
       } catch (e) {
         // Firestore reachable-but-erroring (rules, network, etc.) — fall
         // back to local rather than leaving the jackpot permanently stuck.
+        console.error("Salty's Casino: jackpot Firestore access failed, falling back to local pool.", e);
         broadcast(readLocal());
       }
     })();

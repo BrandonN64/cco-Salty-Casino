@@ -20,13 +20,20 @@
 // how many mines you choose — more mines means a much steeper
 // multiplier curve because surviving each pick is rarer, not because
 // the house is taking a bigger cut on hard settings.
+//
+// AUTOPLAY: during betting, toggle "Autoplay" to stage tiles instead of
+// starting a round immediately — the staged tiles are then auto-revealed
+// every round, back to back, until a mine is hit (round lost, same as
+// manual play), all staged tiles clear safely (auto-cashes out at that
+// multiplier), a round-count limit is reached, or a stop-on-profit/
+// stop-on-loss threshold is crossed — whichever comes first.
 // ==/UserScript==
 (function () {
   "use strict";
 
   const {
     MIN_BET, MAX_BET, GAME_MODULES, OVERLAY_ID,
-    Balance, clamp, fmt, chipColor, chipStyle, chipLabel,
+    Balance, clamp, delay, fmt, chipColor, chipStyle, chipLabel,
     CHIP_DENOMS, toast,
   } = window.SaltyCore;
 
@@ -39,6 +46,10 @@
 
   const JACKPOT_SIDE_BET = 250_000; // same flat stake as every other table's qualifying bet
   const JACKPOT_TIER = "major"; // clearing every safe tile on a 24-mine board is astronomically rare
+
+  const AUTO_REVEAL_DELAY_MS = 380; // pace between each staged tile auto-revealing
+  const AUTO_ROUND_GAP_MS = 550; // pause between autoplay rounds so results are readable
+  const AUTO_DEFAULT_ROUNDS = 10;
 
   function fmtJackpot(n) {
     return (n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -118,6 +129,9 @@
           <h3>Full clear</h3>
           <p>If you reveal every single safe tile without hitting a mine, the round ends automatically as a full clear at the maximum multiplier for your chosen mine count — there's nothing left to reveal, so there's nothing left to risk.</p>
 
+          <h3>Autoplay</h3>
+          <p>Toggle <b>Autoplay</b> during betting to stage tiles instead of playing manually — click the tiles you want auto-revealed each round. Autoplay then repeats: bet, reveal your staged tiles in order, cash out automatically if they all clear safely, and start the next round — until a mine is hit, your staged tiles all clear on a round (which cashes out and stops there, since there's nothing further staged to reveal that round), your round limit is reached, or a stop-on-profit/stop-on-loss threshold you set is crossed.</p>
+
           <h3>Progressive jackpot</h3>
           <p>0.05% of every wager placed at any table feeds one shared jackpot pool, whether or not you bet on it. <b>Collecting it is separate</b> — place the flat <b>Jackpot</b> bet (${fmt(JACKPOT_SIDE_BET)}) to be eligible that round. With it down, a <b>full clear</b> (every safe tile revealed, on any mine count) pays out a share of the shared pool, on top of your normal full-clear multiplier payout. Without the Jackpot bet, a full clear still pays its normal amount — you just don't collect the extra. Like any other side bet, the Jackpot bet is lost if you don't full-clear the board that round.</p>
         </div>
@@ -159,6 +173,7 @@
       #${OVERLAY_ID} .mines-tile.revealed.safe{ background:linear-gradient(145deg, #1f4a34, #0e3b2c); border-color:var(--success); color:var(--success); animation:minesTileIn .25s ease-out; }
       #${OVERLAY_ID} .mines-tile.revealed.mine{ background:linear-gradient(145deg, #4a1414, #2b0808); border-color:var(--danger); color:var(--danger); animation:minesTileIn .25s ease-out; }
       #${OVERLAY_ID} .mines-tile.ghost-mine{ background:linear-gradient(145deg, #3a1414, #200808); border-color:rgba(229,72,77,.4); color:rgba(229,72,77,.6); opacity:.6; }
+      #${OVERLAY_ID} .mines-tile.staged{ border-color:var(--purple-bright); box-shadow:0 0 0 2px rgba(124,58,237,.5); background:linear-gradient(145deg, #241a3d, #1a1230); }
       @keyframes minesTileIn{ from { transform:scale(.7) rotate(-8deg); opacity:0; } to { transform:none; opacity:1; } }
 
       #${OVERLAY_ID} .mines-panel{
@@ -198,6 +213,21 @@
       #${OVERLAY_ID} .mines-round-summary.win .mines-round-summary-headline{ color:var(--success); }
       #${OVERLAY_ID} .mines-round-summary.lose .mines-round-summary-headline{ color:var(--danger); }
 
+      /* --- autoplay --- */
+      #${OVERLAY_ID} .mines-auto-toggle-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+      #${OVERLAY_ID} .mines-auto-panel{
+        display:flex; flex-direction:column; gap:8px; padding:10px 12px; margin-top:6px;
+        background:rgba(124,58,237,.08); border:1px solid rgba(124,58,237,.35); border-radius:10px;
+      }
+      #${OVERLAY_ID} .mines-auto-row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+      #${OVERLAY_ID} .mines-auto-row label{ font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.4px; min-width:110px; }
+      #${OVERLAY_ID} .mines-auto-row input[type=number]{ width:100px; }
+      #${OVERLAY_ID} .mines-auto-status{
+        text-align:center; font:700 13px/1.4 "JetBrains Mono",monospace; color:var(--purple-bright);
+        padding:8px; background:rgba(124,58,237,.12); border-radius:8px; margin-top:6px;
+      }
+      #${OVERLAY_ID} .mines-auto-status .muted{ color:var(--text-dim); font-family:Inter,sans-serif; font-weight:600; font-size:11px; display:block; margin-top:2px; }
+
       #saltys-mines-rules{
         position:fixed; inset:0; z-index:100002; display:flex; align-items:center; justify-content:center;
         background:rgba(0,0,0,.75); font:14px/1.6 Inter,system-ui,sans-serif;
@@ -231,6 +261,10 @@
       return {
         phase: "betting", mines: DEFAULT_MINES, bet: Math.min(100, MAX_BET), jackpotOn: false,
         minePositions: null, revealed: [], picks: 0, lastResult: null,
+        // Autoplay
+        autoMode: false, autoStagedTiles: [], autoRunning: false,
+        autoRoundsTotal: AUTO_DEFAULT_ROUNDS, autoRoundsPlayed: 0,
+        autoStopOnProfit: 0, autoStopOnLoss: 0, autoCumulativeProfit: 0,
       };
     }
 
@@ -328,23 +362,90 @@
       render();
     }
 
+    // ---------------------------------------------------------------------
+    // AUTOPLAY — repeats full rounds using the staged tile pattern, back
+    // to back, until a stop condition hits. Reuses startRound()/
+    // revealTile()/cashOut() exactly as manual play does, so settlement,
+    // jackpot contribution, and Balance transactions all go through the
+    // same paths — autoplay is just a scripted sequence of the same
+    // actions a player would click manually.
+    // ---------------------------------------------------------------------
+    function toggleAutoTile(idx) {
+      if (state.phase !== "betting") return;
+      const i = state.autoStagedTiles.indexOf(idx);
+      if (i >= 0) state.autoStagedTiles.splice(i, 1);
+      else state.autoStagedTiles.push(idx);
+      render();
+    }
+
+    async function runAutoplay() {
+      if (state.autoRunning) return;
+      if (!state.autoStagedTiles.length) { toast("Select at least one tile to auto-reveal each round."); return; }
+      state.autoRunning = true;
+      state.autoRoundsPlayed = 0;
+      state.autoCumulativeProfit = 0;
+      render();
+
+      while (state.autoRunning && state.autoRoundsPlayed < state.autoRoundsTotal) {
+        await startRound();
+        if (state.phase !== "playing") { state.autoRunning = false; break; } // bet failed (insufficient balance etc.)
+
+        for (const idx of state.autoStagedTiles) {
+          if (!state.autoRunning || state.phase !== "playing") break; // hit a mine or full-cleared already
+          await revealTile(idx);
+          if (state.phase === "playing") await delay(AUTO_REVEAL_DELAY_MS);
+        }
+        // If every staged tile came up safe and the round is still live
+        // (didn't full-clear on its own), lock in the multiplier — an
+        // autoplay round always stops revealing once its staged tiles
+        // are done, exactly as if the player clicked Cash Out there.
+        if (state.phase === "playing" && state.picks > 0) {
+          await cashOut();
+        }
+
+        state.autoRoundsPlayed++;
+        state.autoCumulativeProfit += state.lastResult ? state.lastResult.totalProfit : 0;
+        render();
+
+        if (state.lastResult && state.lastResult.outcome === "mine") { state.autoRunning = false; break; }
+        if (state.autoStopOnProfit > 0 && state.autoCumulativeProfit >= state.autoStopOnProfit) { state.autoRunning = false; break; }
+        if (state.autoStopOnLoss > 0 && state.autoCumulativeProfit <= -state.autoStopOnLoss) { state.autoRunning = false; break; }
+        if (!state.autoRunning) break;
+
+        state.phase = "betting"; // reset for the next scripted round
+        render();
+        await delay(AUTO_ROUND_GAP_MS);
+      }
+
+      state.autoRunning = false;
+      render();
+    }
+
+    function stopAutoplay() {
+      state.autoRunning = false;
+      render();
+    }
+
     function render() {
       if (!root) return;
       ensureMinesSharedStyle();
       const jackpotBanner = `<div class="mines-jackpot-banner" id="mines-jackpot-banner">PROGRESSIVE JACKPOT: ${fmtJackpot(jackpotAmount)}</div>`;
       const inRound = state.phase === "playing" || state.phase === "settled";
       const showMines = state.phase === "settled" && state.lastResult && state.lastResult.outcome === "mine";
+      const staging = state.phase === "betting" && state.autoMode;
 
       const boardHtml = `<div class="mines-board">
         ${Array.from({ length: GRID_SIZE }, (_, i) => i).map((i) => {
           const isRevealed = state.revealed.includes(i);
           const isMine = inRound && state.minePositions && state.minePositions.has(i);
+          const isStaged = staging && state.autoStagedTiles.includes(i);
           const cls = ["mines-tile"];
           let content = "";
           if (isRevealed && isMine) { cls.push("revealed", "mine"); content = "💥"; }
           else if (isRevealed) { cls.push("revealed", "safe"); content = "💎"; }
           else if (showMines && isMine) { cls.push("ghost-mine"); content = "💣"; }
-          if (state.phase !== "playing" || isRevealed) cls.push("disabled");
+          else if (isStaged) { cls.push("staged"); content = "🎯"; }
+          if ((state.phase !== "playing" && !staging) || isRevealed) cls.push("disabled");
           return `<div class="${cls.join(" ")}" data-tile="${i}">${content}</div>`;
         }).join("")}
       </div>`;
@@ -365,32 +466,65 @@
         </div>`;
       })() : "";
 
+      const autoStatusHtml = state.autoRunning ? `<div class="mines-auto-status">
+        Autoplay running — round ${state.autoRoundsPlayed + 1} of ${state.autoRoundsTotal}
+        <span class="muted">Cumulative: ${state.autoCumulativeProfit >= 0 ? "+" : ""}${fmt(state.autoCumulativeProfit)}</span>
+      </div>` : (state.autoRoundsPlayed > 0 && !state.autoRunning && state.phase === "betting" ? `<div class="mines-auto-status">
+        Autoplay stopped after ${state.autoRoundsPlayed} round${state.autoRoundsPlayed === 1 ? "" : "s"}
+        <span class="muted">Cumulative: ${state.autoCumulativeProfit >= 0 ? "+" : ""}${fmt(state.autoCumulativeProfit)}</span>
+      </div>` : "");
+
       let controlsHtml;
       if (state.phase === "betting") {
+        const autoPanelHtml = state.autoMode ? `<div class="mines-auto-panel">
+          <div class="muted" style="font-size:12px">Click tiles on the board above to stage them — they'll auto-reveal in that order every round.</div>
+          <div class="mines-auto-row">
+            <label>Rounds to play</label>
+            <input type="number" id="mines-auto-rounds" min="1" max="500" value="${state.autoRoundsTotal}" ${state.autoRunning ? "disabled" : ""}>
+          </div>
+          <div class="mines-auto-row">
+            <label>Stop if profit ≥</label>
+            <input type="number" id="mines-auto-stop-profit" min="0" value="${state.autoStopOnProfit}" placeholder="0 = off" ${state.autoRunning ? "disabled" : ""}>
+          </div>
+          <div class="mines-auto-row">
+            <label>Stop if loss ≥</label>
+            <input type="number" id="mines-auto-stop-loss" min="0" value="${state.autoStopOnLoss}" placeholder="0 = off" ${state.autoRunning ? "disabled" : ""}>
+          </div>
+          <div class="row center" style="gap:8px">
+            ${state.autoRunning
+              ? `<button class="btn primary" id="mines-auto-stop">Stop Autoplay</button>`
+              : `<button class="btn primary" id="mines-auto-start" ${!state.autoStagedTiles.length || !state.bet ? "disabled" : ""}>Start Autoplay</button>`}
+          </div>
+        </div>` : "";
         controlsHtml = `
           <div class="mines-panel">
             <div class="mines-mine-picker">
               <span class="muted">Mines</span>
-              <input type="range" id="mines-count-slider" min="${MIN_MINES}" max="${MAX_MINES}" value="${state.mines}" />
+              <input type="range" id="mines-count-slider" min="${MIN_MINES}" max="${MAX_MINES}" value="${state.mines}" ${state.autoRunning ? "disabled" : ""} />
               <span class="mines-mine-count">${state.mines}</span>
             </div>
             <div class="row" style="justify-content:space-between;align-items:center">
               ${chipStackHtml(state.bet)}
               ${jackpotSpotHtml(state.jackpotOn)}
             </div>
+            <div class="mines-auto-toggle-row">
+              <span class="muted">Autoplay mode</span>
+              <button class="btn small ${state.autoMode ? "gold" : ""}" id="mines-auto-toggle" ${state.autoRunning ? "disabled" : ""}>${state.autoMode ? "On" : "Off"}</button>
+            </div>
+            ${autoPanelHtml}
           </div>
           <div class="ov-chip-rail">
             <div class="chip-select">
               ${CHIP_DENOMS.map((v) => `
-                <div class="chip-btn" data-chip="${v}" ${busy ? "" : 'draggable="true"'} style="${chipStyle(v)}">
+                <div class="chip-btn" data-chip="${v}" ${busy || state.autoRunning ? "" : 'draggable="true"'} style="${chipStyle(v)}">
                   <span class="chip-face">${chipLabel(v)}</span>
                 </div>
               `).join("")}
             </div>
             <div class="row center" style="gap:10px;flex-wrap:wrap">
-              <button class="btn small gold" id="mines-bet-max" ${busy ? "disabled" : ""}>Max</button>
-              <button class="btn small" id="mines-bet-clear-amt" ${busy ? "disabled" : ""}>Clear Bet</button>
-              <button class="btn primary" id="mines-start" ${busy || !state.bet ? "disabled" : ""}>Start</button>
+              <button class="btn small gold" id="mines-bet-max" ${busy || state.autoRunning ? "disabled" : ""}>Max</button>
+              <button class="btn small" id="mines-bet-clear-amt" ${busy || state.autoRunning ? "disabled" : ""}>Clear Bet</button>
+              ${!state.autoMode ? `<button class="btn primary" id="mines-start" ${busy || !state.bet ? "disabled" : ""}>Start</button>` : ""}
             </div>
           </div>`;
       } else if (state.phase === "playing") {
@@ -398,13 +532,13 @@
           <button class="btn primary" id="mines-cashout" ${busy || state.picks === 0 ? "disabled" : ""} title="${state.picks === 0 ? "Reveal at least one safe tile first" : ""}">Cash Out ${multiplierFor(state.mines, state.picks).toFixed(2)}x</button>
         </div>`;
       } else {
-        controlsHtml = `<div class="row center mt16">
+        controlsHtml = state.autoRunning ? "" : `<div class="row center mt16">
           <button class="btn primary" id="mines-rebet">Rebet ${fmt(state.bet)}${state.jackpotOn ? " + jackpot" : ""}</button>
           <button class="btn" id="mines-again">Change Bet</button>
         </div>`;
       }
 
-      root.innerHTML = jackpotBanner + rulesButtonRowHtml() + boardHtml + liveMultHtml + summaryHtml + controlsHtml;
+      root.innerHTML = jackpotBanner + rulesButtonRowHtml() + boardHtml + liveMultHtml + summaryHtml + autoStatusHtml + controlsHtml;
       wireRulesButton(root);
 
       if (state.phase === "playing") {
@@ -416,6 +550,33 @@
       }
 
       if (state.phase === "betting") {
+        if (staging) {
+          root.querySelectorAll("[data-tile]").forEach((tile) => {
+            tile.addEventListener("click", () => toggleAutoTile(parseInt(tile.dataset.tile, 10)));
+          });
+        }
+        const autoToggle = root.querySelector("#mines-auto-toggle");
+        if (autoToggle) autoToggle.addEventListener("click", () => { state.autoMode = !state.autoMode; render(); });
+        const autoRoundsInput = root.querySelector("#mines-auto-rounds");
+        if (autoRoundsInput) autoRoundsInput.addEventListener("change", (e) => {
+          state.autoRoundsTotal = clamp(parseInt(e.target.value, 10) || AUTO_DEFAULT_ROUNDS, 1, 500);
+          render();
+        });
+        const autoStopProfitInput = root.querySelector("#mines-auto-stop-profit");
+        if (autoStopProfitInput) autoStopProfitInput.addEventListener("change", (e) => {
+          state.autoStopOnProfit = Math.max(0, parseInt(e.target.value, 10) || 0);
+          render();
+        });
+        const autoStopLossInput = root.querySelector("#mines-auto-stop-loss");
+        if (autoStopLossInput) autoStopLossInput.addEventListener("change", (e) => {
+          state.autoStopOnLoss = Math.max(0, parseInt(e.target.value, 10) || 0);
+          render();
+        });
+        const autoStartBtn = root.querySelector("#mines-auto-start");
+        if (autoStartBtn) autoStartBtn.addEventListener("click", runAutoplay);
+        const autoStopBtn = root.querySelector("#mines-auto-stop");
+        if (autoStopBtn) autoStopBtn.addEventListener("click", stopAutoplay);
+
         const slider = root.querySelector("#mines-count-slider");
         if (slider) slider.addEventListener("input", (e) => {
           state.mines = clamp(parseInt(e.target.value, 10), MIN_MINES, MAX_MINES);
@@ -465,9 +626,11 @@
           state.bet = 0;
           render();
         });
-        root.querySelector("#mines-start").addEventListener("click", startRound);
-      } else if (state.phase === "settled") {
-        root.querySelector("#mines-again").addEventListener("click", () => {
+        const startBtn = root.querySelector("#mines-start");
+        if (startBtn) startBtn.addEventListener("click", startRound);
+      } else if (state.phase === "settled" && !state.autoRunning) {
+        const againBtn = root.querySelector("#mines-again");
+        if (againBtn) againBtn.addEventListener("click", () => {
           const mines = state.mines, bet = state.bet, jp = state.jackpotOn;
           state = freshState();
           state.mines = mines;
@@ -475,7 +638,8 @@
           state.jackpotOn = jp;
           render();
         });
-        root.querySelector("#mines-rebet").addEventListener("click", () => {
+        const rebetBtn = root.querySelector("#mines-rebet");
+        if (rebetBtn) rebetBtn.addEventListener("click", () => {
           const mines = state.mines, bet = state.bet, jp = state.jackpotOn;
           state = freshState();
           state.mines = mines;
@@ -498,6 +662,7 @@
     // bet, same as if you'd walked away from a real table with your
     // chips still on a board you never touched.
     async function resolveAbandonedRound() {
+      state.autoRunning = false; // stop any scripted loop first
       if (!state || state.phase !== "playing") return;
       if (state.picks > 0) {
         await settle("cashout", multiplierFor(state.mines, state.picks));

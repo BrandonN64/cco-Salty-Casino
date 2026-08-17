@@ -27,6 +27,19 @@
 // rendered correctly after visiting Blackjack once, which is what injected
 // that style block. They now live here instead, so they're guaranteed
 // present regardless of which tab loads first.
+//
+// NOTE (STATS): Balance.applyDelta() now also maintains a lightweight
+// running `stats` aggregate on the same players/{uid} doc, updated in the
+// exact same Firestore transaction that already writes the balance and
+// the ledger entry — no extra reads, and no changes needed in any game
+// file (they all already call applyDelta(delta, reason)). See
+// classifyLedgerReason()/computeUpdatedStats() below. This powers the P/L
+// tracker on the Account page (salty-account.js). One deliberate honesty
+// note: loss settlements never call applyDelta() at all in these games
+// (`if (payout > 0) await Balance.applyDelta(...)` skips the call when
+// you lose, since there's nothing to credit), so a "biggest single loss"
+// stat can't be honestly derived from this data — we track "biggest single
+// bet" instead, which IS cleanly derivable.
 // ==/UserScript==
 (function () {
   "use strict";
@@ -539,10 +552,80 @@
   // ---------------------------------------------------------------------
   // 3. BALANCE MANAGER — closed-loop points, stored per-browser-profile
   //    via Firebase Anonymous Auth. Never touches real case-clicker data.
+  //
+  //    Also maintains a running `stats` aggregate (P/L, biggest win,
+  //    biggest bet, per-game breakdown) on the same player doc, updated
+  //    atomically alongside every balance change — see the NOTE (STATS)
+  //    comment at the top of this file for why, and the honesty note
+  //    about "biggest loss" not being derivable from this data.
   // ---------------------------------------------------------------------
+  function emptyStats() {
+    return {
+      totalWagered: 0, totalReturned: 0, netProfit: 0, roundsPlayed: 0,
+      biggestWin: null, biggestBet: null, perGame: {},
+    };
+  }
+  // Reasons follow the convention `solo_<game>_<action>` or
+  // `live_<game>_<action>` (e.g. "solo_bj_settle_multi", "solo_mines_bet"),
+  // or `jackpot_<tier>_<gameId>` for shared progressive jackpot payouts
+  // (attributed to the underlying game, not lumped into a generic
+  // "jackpot" bucket, since it's really a side-bet win on that table).
+  // Anything that doesn't match either shape falls into "other" so a
+  // future game with a slightly different naming convention still gets
+  // counted somewhere instead of throwing.
+  function classifyLedgerReason(reason) {
+    if (!reason) return { game: "other", kind: "other" };
+    if (reason.startsWith("jackpot_")) {
+      const parts = reason.split("_");
+      return { game: parts[parts.length - 1] || "other", kind: "win" };
+    }
+    let m = reason.match(/^(?:solo|live)_([a-z0-9]+)_(.+)$/);
+    if (!m) m = reason.match(/^([a-z0-9]+)_(.+)$/);
+    if (!m) return { game: "other", kind: "other" };
+    const game = m[1];
+    const rest = m[2];
+    if (/bet|deal/.test(rest)) return { game, kind: "wager" };
+    if (/settle|win|push|blackjack|clear|cashout|instant/.test(rest)) return { game, kind: "win" };
+    return { game, kind: "other" };
+  }
+  function computeUpdatedStats(prev, delta, reason, atMs) {
+    const stats = {
+      totalWagered: prev.totalWagered || 0,
+      totalReturned: prev.totalReturned || 0,
+      netProfit: prev.netProfit || 0,
+      roundsPlayed: prev.roundsPlayed || 0,
+      biggestWin: prev.biggestWin || null,
+      biggestBet: prev.biggestBet || null,
+      perGame: { ...(prev.perGame || {}) },
+    };
+    const { game, kind } = classifyLedgerReason(reason);
+    const g = { ...(stats.perGame[game] || { totalWagered: 0, totalReturned: 0, netProfit: 0, roundsPlayed: 0, biggestWin: null, biggestBet: null }) };
+
+    if (kind === "wager") {
+      const amt = Math.abs(delta);
+      stats.totalWagered += amt;
+      stats.roundsPlayed += 1;
+      if (!stats.biggestBet || amt > stats.biggestBet.amount) stats.biggestBet = { amount: amt, reason, game, at: atMs };
+      g.totalWagered += amt;
+      g.roundsPlayed += 1;
+      if (!g.biggestBet || amt > g.biggestBet.amount) g.biggestBet = { amount: amt, reason, at: atMs };
+    } else if (kind === "win" && delta > 0) {
+      stats.totalReturned += delta;
+      if (!stats.biggestWin || delta > stats.biggestWin.amount) stats.biggestWin = { amount: delta, reason, game, at: atMs };
+      g.totalReturned += delta;
+      if (!g.biggestWin || delta > g.biggestWin.amount) g.biggestWin = { amount: delta, reason, at: atMs };
+    }
+    g.netProfit = g.totalReturned - g.totalWagered;
+    stats.perGame[game] = g;
+    stats.netProfit = stats.totalReturned - stats.totalWagered;
+    return stats;
+  }
+
   const Balance = {
     current: null,
+    statsCurrent: null,
     _listeners: new Set(),
+    _statsListeners: new Set(),
     _unsub: null,
 
     async init() {
@@ -550,7 +633,9 @@
         // Offline / not-configured fallback so games are still playable
         // locally (balance won't sync or persist across sessions).
         this.current = STARTING_BALANCE;
+        this.statsCurrent = emptyStats();
         this._emit();
+        this._emitStats();
         return;
       }
       await authReady;
@@ -560,14 +645,18 @@
         await ref.set({
           balance: STARTING_BALANCE,
           handle: localStorage.getItem(LS_HANDLE) || "Player",
+          stats: emptyStats(),
           createdAt: firebase.firestore.FieldValue.serverTimestamp(),
           updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
         });
       }
       this._unsub = ref.onSnapshot((doc) => {
         if (doc.exists) {
-          this.current = doc.data().balance;
+          const data = doc.data();
+          this.current = data.balance;
+          this.statsCurrent = data.stats || emptyStats();
           this._emit();
+          this._emitStats();
         }
       });
     },
@@ -581,22 +670,41 @@
       for (const fn of this._listeners) fn(this.current);
     },
 
+    // Live updates of the P/L stats aggregate — see NOTE (STATS) above.
+    // Fires immediately with the current cached value on subscribe, same
+    // pattern as subscribe() for the balance itself.
+    subscribeStats(fn) {
+      this._statsListeners.add(fn);
+      if (this.statsCurrent !== null) fn(this.statsCurrent);
+      return () => this._statsListeners.delete(fn);
+    },
+    _emitStats() {
+      for (const fn of this._statsListeners) fn(this.statsCurrent);
+    },
+
     // Atomically apply a delta (positive = credit, negative = debit).
     // Rejects if it would take balance below zero. Returns the new balance.
+    // Also updates the `stats` aggregate in the same transaction — see
+    // NOTE (STATS) at the top of this file.
     async applyDelta(delta, reason) {
+      const atMs = Date.now();
       if (!firebaseConfigured) {
         this.current = Math.max(0, this.current + delta);
+        this.statsCurrent = computeUpdatedStats(this.statsCurrent || emptyStats(), delta, reason, atMs);
         this._emit();
+        this._emitStats();
         return this.current;
       }
       await authReady;
       const ref = db.collection("players").doc(uid);
       const newBal = await db.runTransaction(async (tx) => {
         const snap = await tx.get(ref);
-        const bal = snap.data().balance;
+        const data = snap.data();
+        const bal = data.balance;
         const next = bal + delta;
         if (next < 0) throw new Error("insufficient-balance");
-        tx.update(ref, { balance: next, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+        const nextStats = computeUpdatedStats(data.stats || emptyStats(), delta, reason, atMs);
+        tx.update(ref, { balance: next, stats: nextStats, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
         const ledgerRef = ref.collection("ledger").doc();
         tx.set(ledgerRef, {
           delta, reason, balanceAfter: next,
@@ -948,6 +1056,20 @@
         background:linear-gradient(180deg, rgba(0,0,0,.25), rgba(0,0,0,.1));
         box-shadow:inset 0 2px 6px rgba(0,0,0,.5);
       }
+
+      /* --- account page (P/L tracker + Case-Clicker profile) --- */
+      #${OVERLAY_ID} .acct-header{ display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+      #${OVERLAY_ID} .acct-avatar{ width:64px; height:64px; border-radius:50%; border:2px solid var(--gold); object-fit:cover; background:var(--panel-2); }
+      #${OVERLAY_ID} .acct-stat-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-top:14px; }
+      #${OVERLAY_ID} .acct-stat-card{ background:var(--panel-2); border:1px solid var(--border); border-radius:12px; padding:14px 16px; text-align:center; }
+      #${OVERLAY_ID} .acct-stat-label{ font-size:10.5px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.5px; margin-bottom:6px; }
+      #${OVERLAY_ID} .acct-stat-value{ font:800 20px/1 "JetBrains Mono",monospace; color:var(--text); }
+      #${OVERLAY_ID} .acct-stat-value.win{ color:var(--success); }
+      #${OVERLAY_ID} .acct-stat-value.lose{ color:var(--danger); }
+      #${OVERLAY_ID} .acct-game-table{ width:100%; border-collapse:collapse; margin-top:10px; }
+      #${OVERLAY_ID} .acct-game-table th{ text-align:left; font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.4px; padding:6px 10px; border-bottom:1px solid var(--border); }
+      #${OVERLAY_ID} .acct-game-table td{ padding:8px 10px; font:600 13px/1.3 "JetBrains Mono",monospace; border-bottom:1px solid var(--border); }
+      #${OVERLAY_ID} .acct-game-table td.game-name{ font-family:Inter,sans-serif; font-weight:700; }
 
       #${LAUNCH_ID}{
         position:fixed; left:16px; bottom:16px; z-index:99998;

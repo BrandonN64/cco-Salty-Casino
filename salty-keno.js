@@ -14,6 +14,12 @@
 // on purpose (verified against the exact hypergeometric probabilities,
 // not eyeballed), so this plays true to the actual game instead of
 // secretly being an easy bet with a keno coat of paint on it.
+//
+// AUTOPLAY: pick your numbers as normal, then set a round count and
+// optional stop-on-profit/stop-on-loss thresholds and hit Start Autoplay.
+// Keno has no mid-round decisions the way Mines does — a round is either
+// not yet drawn or fully drawn and settled — so autoplay here is simply
+// "repeat the same ticket back to back" until a stop condition hits.
 // ==/UserScript==
 (function () {
   "use strict";
@@ -28,6 +34,9 @@
   const NUMBERS_DRAWN = 20;
   const MAX_SPOTS = 10;
   const DRAW_BALL_MS = 140; // per-ball reveal pace during the draw animation
+
+  const AUTO_ROUND_GAP_MS = 550; // pause between autoplay rounds so results are readable
+  const AUTO_DEFAULT_ROUNDS = 10;
 
   // Multiplier paytable, keyed by how many spots you picked, then by how
   // many of those you caught. Values are multiples of your bet (e.g. a
@@ -135,6 +144,8 @@
           <p>Keno carries one of the highest house edges of any casino game, typically 20&ndash;35% at real tables — nowhere close to blackjack or baccarat's edge. The multipliers here are built to land in that same range on purpose, so this plays true to the actual game instead of secretly being an easy bet with a keno coat of paint on it.</p>
           <h3>Paytable by spot count</h3>
           <div class="keno-rules-spot-grid">${allSpotsRows}</div>
+          <h3>Autoplay</h3>
+          <p>Pick your numbers, then set a round count and (optionally) a stop-on-profit or stop-on-loss threshold before hitting <b>Start Autoplay</b>. Keno has no mid-round decisions — a round is either not yet drawn or fully settled — so autoplay simply repeats the exact same ticket, back to back, until your round limit or a stop threshold is reached.</p>
           <h3>Progressive jackpot</h3>
           <p>0.05% of every wager placed at any table feeds one shared jackpot pool, whether or not you bet on it. <b>Collecting it is separate</b> — place the flat <b>Jackpot</b> bet (${fmt(JACKPOT_SIDE_BET)}) to be eligible that round. With it down, playing a full ${MAX_SPOTS}-spot ticket and catching <b>all ${MAX_SPOTS}</b> pays out a share of the shared pool, on top of your normal ${PAYTABLE[10][10]}x paytable payout for that catch. Without the Jackpot bet, a perfect catch still pays its normal amount — you just don't collect the extra. Like any other side bet, the Jackpot bet is lost if you don't hit a perfect catch on a full 10-spot ticket that round.</p>
         </div>
@@ -260,6 +271,20 @@
       #${OVERLAY_ID} .keno-round-summary.win .keno-round-summary-headline{ color:var(--success); }
       #${OVERLAY_ID} .keno-round-summary.lose .keno-round-summary-headline{ color:var(--danger); }
 
+      /* --- autoplay --- */
+      #${OVERLAY_ID} .keno-auto-panel{
+        display:flex; flex-direction:column; gap:8px; padding:10px 12px; margin:10px auto 0; max-width:640px;
+        background:rgba(124,58,237,.08); border:1px solid rgba(124,58,237,.35); border-radius:10px;
+      }
+      #${OVERLAY_ID} .keno-auto-row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+      #${OVERLAY_ID} .keno-auto-row label{ font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.4px; min-width:110px; }
+      #${OVERLAY_ID} .keno-auto-row input[type=number]{ width:100px; }
+      #${OVERLAY_ID} .keno-auto-status{
+        text-align:center; font:700 13px/1.4 "JetBrains Mono",monospace; color:var(--purple-bright);
+        max-width:640px; margin:10px auto 0; padding:8px; background:rgba(124,58,237,.12); border-radius:8px;
+      }
+      #${OVERLAY_ID} .keno-auto-status .muted{ color:var(--text-dim); font-family:Inter,sans-serif; font-weight:600; font-size:11px; display:block; margin-top:2px; }
+
       #saltys-keno-rules{
         position:fixed; inset:0; z-index:100002; display:flex; align-items:center; justify-content:center;
         background:rgba(0,0,0,.75); font:14px/1.6 Inter,system-ui,sans-serif;
@@ -295,11 +320,14 @@
       return {
         phase: "betting", picked: [], bet: Math.min(100, MAX_BET), jackpotOn: false,
         drawn: [], revealed: [], lastResult: null,
+        // Autoplay
+        autoRunning: false, autoRoundsTotal: AUTO_DEFAULT_ROUNDS, autoRoundsPlayed: 0,
+        autoStopOnProfit: 0, autoStopOnLoss: 0, autoCumulativeProfit: 0,
       };
     }
 
     function togglePick(n) {
-      if (state.phase !== "betting") return;
+      if (state.phase !== "betting" || state.autoRunning) return;
       const idx = state.picked.indexOf(n);
       if (idx >= 0) { state.picked.splice(idx, 1); render(); return; }
       if (state.picked.length >= MAX_SPOTS) { toast(`You can only pick up to ${MAX_SPOTS} spots.`); return; }
@@ -308,6 +336,7 @@
     }
 
     function quickPick() {
+      if (state.autoRunning) return;
       state.picked = [];
       const pool = Array.from({ length: TOTAL_NUMBERS }, (_, i) => i + 1);
       for (let i = pool.length - 1; i > 0; i--) {
@@ -385,6 +414,56 @@
       render();
     }
 
+    // ---------------------------------------------------------------------
+    // AUTOPLAY — no mid-round decisions in Keno (a round is either
+    // "not yet drawn" or "fully settled"), so this just calls startDraw()
+    // repeatedly with the same ticket, exactly as if the player clicked
+    // Draw again each time, until a stop condition hits.
+    // ---------------------------------------------------------------------
+    async function runAutoplay() {
+      if (state.autoRunning || busy) return;
+      if (state.picked.length < 1) { toast("Pick at least 1 number to play."); return; }
+      if (!state.bet) { toast("Place a bet to play."); return; }
+      state.autoRunning = true;
+      state.autoRoundsPlayed = 0;
+      state.autoCumulativeProfit = 0;
+      render();
+
+      const stickyPicked = [...state.picked];
+      const stickyBet = state.bet;
+      const stickyJackpot = state.jackpotOn;
+
+      while (state.autoRunning && state.autoRoundsPlayed < state.autoRoundsTotal) {
+        state.picked = [...stickyPicked];
+        state.bet = stickyBet;
+        state.jackpotOn = stickyJackpot;
+        await startDraw();
+
+        state.autoRoundsPlayed++;
+        state.autoCumulativeProfit += state.lastResult ? state.lastResult.totalProfit : 0;
+        render();
+
+        if (state.autoStopOnProfit > 0 && state.autoCumulativeProfit >= state.autoStopOnProfit) { state.autoRunning = false; break; }
+        if (state.autoStopOnLoss > 0 && state.autoCumulativeProfit <= -state.autoStopOnLoss) { state.autoRunning = false; break; }
+        if (!state.autoRunning) break;
+
+        state.phase = "betting"; // reset for the next scripted round
+        render();
+        await delay(AUTO_ROUND_GAP_MS);
+      }
+
+      state.picked = stickyPicked;
+      state.bet = stickyBet;
+      state.jackpotOn = stickyJackpot;
+      state.autoRunning = false;
+      render();
+    }
+
+    function stopAutoplay() {
+      state.autoRunning = false;
+      render();
+    }
+
     function render() {
       if (!root) return;
       ensureKenoSharedStyle();
@@ -400,7 +479,7 @@
           if (picked) cls.push("picked");
           if (drawn) cls.push("drawn");
           if (hit) cls.push("hit");
-          if (state.phase !== "betting") cls.push("disabled");
+          if (state.phase !== "betting" || state.autoRunning) cls.push("disabled");
           return `<div class="${cls.join(" ")}" data-num="${n}">${n}</div>`;
         }).join("")}
       </div>`;
@@ -429,8 +508,35 @@
         </div>`;
       })() : "";
 
+      const autoStatusHtml = state.autoRunning ? `<div class="keno-auto-status">
+        Autoplay running — round ${state.autoRoundsPlayed + 1} of ${state.autoRoundsTotal}
+        <span class="muted">Cumulative: ${state.autoCumulativeProfit >= 0 ? "+" : ""}${fmt(state.autoCumulativeProfit)}</span>
+      </div>` : (state.autoRoundsPlayed > 0 && !state.autoRunning && state.phase === "betting" ? `<div class="keno-auto-status">
+        Autoplay stopped after ${state.autoRoundsPlayed} round${state.autoRoundsPlayed === 1 ? "" : "s"}
+        <span class="muted">Cumulative: ${state.autoCumulativeProfit >= 0 ? "+" : ""}${fmt(state.autoCumulativeProfit)}</span>
+      </div>` : "");
+
       let controlsHtml;
       if (state.phase === "betting") {
+        const autoPanelHtml = `<div class="keno-auto-panel">
+          <div class="keno-auto-row">
+            <label>Rounds to play</label>
+            <input type="number" id="keno-auto-rounds" min="1" max="500" value="${state.autoRoundsTotal}" ${state.autoRunning ? "disabled" : ""}>
+          </div>
+          <div class="keno-auto-row">
+            <label>Stop if profit ≥</label>
+            <input type="number" id="keno-auto-stop-profit" min="0" value="${state.autoStopOnProfit}" placeholder="0 = off" ${state.autoRunning ? "disabled" : ""}>
+          </div>
+          <div class="keno-auto-row">
+            <label>Stop if loss ≥</label>
+            <input type="number" id="keno-auto-stop-loss" min="0" value="${state.autoStopOnLoss}" placeholder="0 = off" ${state.autoRunning ? "disabled" : ""}>
+          </div>
+          <div class="row center" style="gap:8px">
+            ${state.autoRunning
+              ? `<button class="btn primary" id="keno-auto-stop">Stop Autoplay</button>`
+              : `<button class="btn primary" id="keno-auto-start" ${!spots || !state.bet ? "disabled" : ""}>Start Autoplay</button>`}
+          </div>
+        </div>`;
         controlsHtml = `
           <div class="keno-panel">
             <div class="row" style="gap:10px;align-items:center">
@@ -438,35 +544,36 @@
               <span class="muted">${spots} spot${spots === 1 ? "" : "s"} picked · max ${MAX_SPOTS}</span>
             </div>
             <div class="row" style="gap:8px">
-              <button class="btn small" id="keno-quickpick">Quick Pick</button>
-              <button class="btn small" id="keno-clear-picks">Clear Numbers</button>
+              <button class="btn small" id="keno-quickpick" ${state.autoRunning ? "disabled" : ""}>Quick Pick</button>
+              <button class="btn small" id="keno-clear-picks" ${state.autoRunning ? "disabled" : ""}>Clear Numbers</button>
               ${jackpotSpotHtml(state.jackpotOn)}
             </div>
           </div>
           <div class="ov-chip-rail">
             <div class="chip-select">
               ${CHIP_DENOMS.map((v) => `
-                <div class="chip-btn" data-chip="${v}" ${busy ? "" : 'draggable="true"'} style="${chipStyle(v)}">
+                <div class="chip-btn" data-chip="${v}" ${busy || state.autoRunning ? "" : 'draggable="true"'} style="${chipStyle(v)}">
                   <span class="chip-face">${chipLabel(v)}</span>
                 </div>
               `).join("")}
             </div>
             <div class="row center" style="gap:10px;flex-wrap:wrap">
-              <button class="btn small gold" id="keno-bet-max" ${busy ? "disabled" : ""}>Max</button>
-              <button class="btn small" id="keno-bet-clear-amt" ${busy ? "disabled" : ""}>Clear Bet</button>
-              <button class="btn primary" id="keno-draw" ${busy || !spots || !state.bet ? "disabled" : ""}>Draw</button>
+              <button class="btn small gold" id="keno-bet-max" ${busy || state.autoRunning ? "disabled" : ""}>Max</button>
+              <button class="btn small" id="keno-bet-clear-amt" ${busy || state.autoRunning ? "disabled" : ""}>Clear Bet</button>
+              ${!state.autoRunning ? `<button class="btn primary" id="keno-draw" ${busy || !spots || !state.bet ? "disabled" : ""}>Draw</button>` : ""}
             </div>
-          </div>`;
+          </div>
+          ${autoPanelHtml}`;
       } else if (state.phase === "drawing") {
         controlsHtml = `<div class="center muted mt16">Drawing… (${state.revealed.length}/${NUMBERS_DRAWN})</div>`;
       } else {
-        controlsHtml = `<div class="row center mt16">
+        controlsHtml = state.autoRunning ? "" : `<div class="row center mt16">
           <button class="btn primary" id="keno-rebet">Rebet ${fmt(state.bet)}${state.jackpotOn ? " + jackpot" : ""}</button>
           <button class="btn" id="keno-again">Change Numbers</button>
         </div>`;
       }
 
-      root.innerHTML = jackpotBanner + rulesButtonRowHtml() + boardHtml + drawnStripHtml + paytableLiveHtml + summaryHtml + controlsHtml;
+      root.innerHTML = jackpotBanner + rulesButtonRowHtml() + boardHtml + drawnStripHtml + paytableLiveHtml + summaryHtml + autoStatusHtml + controlsHtml;
       wireRulesButton(root);
       wireSoundToggle(root, render);
 
@@ -474,8 +581,10 @@
         root.querySelectorAll("[data-num]").forEach((cell) => {
           cell.addEventListener("click", () => togglePick(parseInt(cell.dataset.num, 10)));
         });
-        root.querySelector("#keno-quickpick").addEventListener("click", quickPick);
-        root.querySelector("#keno-clear-picks").addEventListener("click", () => { state.picked = []; render(); });
+        const quickPickBtn = root.querySelector("#keno-quickpick");
+        if (quickPickBtn) quickPickBtn.addEventListener("click", quickPick);
+        const clearPicksBtn = root.querySelector("#keno-clear-picks");
+        if (clearPicksBtn) clearPicksBtn.addEventListener("click", () => { state.picked = []; render(); });
         const jackpotToggle = root.querySelector("#keno-jackpot-toggle");
         if (jackpotToggle) jackpotToggle.addEventListener("click", () => {
           if (!state.jackpotOn && JACKPOT_SIDE_BET > Balance.current) {
@@ -510,24 +619,49 @@
           }, { passive: false });
           chipSelect.addEventListener("scroll", () => { chipScrollPos = chipSelect.scrollLeft; });
         }
-        root.querySelector("#keno-bet-max").addEventListener("click", () => {
+        const maxBtn = root.querySelector("#keno-bet-max");
+        if (maxBtn) maxBtn.addEventListener("click", () => {
           state.bet = clamp(Math.floor(Balance.current), MIN_BET, MAX_BET);
           render();
         });
-        root.querySelector("#keno-bet-clear-amt").addEventListener("click", () => {
+        const clearBetBtn = root.querySelector("#keno-bet-clear-amt");
+        if (clearBetBtn) clearBetBtn.addEventListener("click", () => {
           state.bet = 0;
           render();
         });
-        root.querySelector("#keno-draw").addEventListener("click", startDraw);
-      } else if (state.phase === "settled") {
-        root.querySelector("#keno-again").addEventListener("click", () => {
+        const drawBtn = root.querySelector("#keno-draw");
+        if (drawBtn) drawBtn.addEventListener("click", startDraw);
+
+        const autoRoundsInput = root.querySelector("#keno-auto-rounds");
+        if (autoRoundsInput) autoRoundsInput.addEventListener("change", (e) => {
+          state.autoRoundsTotal = clamp(parseInt(e.target.value, 10) || AUTO_DEFAULT_ROUNDS, 1, 500);
+          render();
+        });
+        const autoStopProfitInput = root.querySelector("#keno-auto-stop-profit");
+        if (autoStopProfitInput) autoStopProfitInput.addEventListener("change", (e) => {
+          state.autoStopOnProfit = Math.max(0, parseInt(e.target.value, 10) || 0);
+          render();
+        });
+        const autoStopLossInput = root.querySelector("#keno-auto-stop-loss");
+        if (autoStopLossInput) autoStopLossInput.addEventListener("change", (e) => {
+          state.autoStopOnLoss = Math.max(0, parseInt(e.target.value, 10) || 0);
+          render();
+        });
+        const autoStartBtn = root.querySelector("#keno-auto-start");
+        if (autoStartBtn) autoStartBtn.addEventListener("click", runAutoplay);
+        const autoStopBtn = root.querySelector("#keno-auto-stop");
+        if (autoStopBtn) autoStopBtn.addEventListener("click", stopAutoplay);
+      } else if (state.phase === "settled" && !state.autoRunning) {
+        const againBtn = root.querySelector("#keno-again");
+        if (againBtn) againBtn.addEventListener("click", () => {
           const bet = state.bet, jp = state.jackpotOn;
           state = freshState();
           state.bet = bet;
           state.jackpotOn = jp;
           render();
         });
-        root.querySelector("#keno-rebet").addEventListener("click", () => {
+        const rebetBtn = root.querySelector("#keno-rebet");
+        if (rebetBtn) rebetBtn.addEventListener("click", () => {
           const picked = state.picked, bet = state.bet, jp = state.jackpotOn;
           state = freshState();
           state.picked = picked;
@@ -545,7 +679,8 @@
     // animation; the bet was already debited and settle() still runs to
     // pay out correctly the moment the draw loop finishes, even with
     // root === null (render() just no-ops via its `if (!root) return;`
-    // guard at the top).
+    // guard at the top). Autoplay is stopped on unmount so a scripted
+    // loop doesn't keep firing bets against an unmounted table.
 
     return {
       label: "Keno",
@@ -567,6 +702,7 @@
         }
         render();
         return () => {
+          if (state) state.autoRunning = false;
           if (jackpotUnsub) jackpotUnsub();
           root = null;
         };

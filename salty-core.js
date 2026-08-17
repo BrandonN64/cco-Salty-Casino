@@ -199,40 +199,61 @@
   // Renders a bet-amount text input (accepting shorthand) + a row of chip
   // buttons. `idPrefix` namespaces the element ids so multiple instances
   // (solo vs live) don't collide.
-  function renderBetControls(idPrefix, currentBet, disabled) {
-    const pileN = currentBet > 0 ? Math.min(4, Math.max(1, Math.round(Math.log10(Math.max(currentBet, 1)) - 0.5))) : 0;
+  function renderBetControls(idPrefix, currentBet, disabled, opts = {}) {
+    const {
+      selectedChip = CHIP_DENOMS[0],
+      showDouble = true,
+      showDecrement = true,
+    } = opts;
+
+    const pileN = currentBet > 0
+      ? Math.min(4, Math.max(1, Math.round(Math.log10(Math.max(currentBet, 1)) - 0.5)))
+      : 0;
+
     const pileHtml = Array.from({ length: pileN }, (_, i) => `
-      <div class="bet-spot-chip" style="${i > 0 ? "margin-left:-16px;" : ""}${chipStyle(currentBet)}"></div>
-    `).join("");
+    <div class="bet-spot-chip" style="${i > 0 ? "margin-left:-16px;" : ""}${chipStyle(currentBet)}"></div>
+  `).join("");
+
     return `
-      <div class="col" style="gap:10px">
-        <div class="row" style="align-items:center;gap:12px">
-          <div class="bet-spot" id="${idPrefix}-bet-spot" title="Click or drag chips here">
-            <div class="bet-spot-ring"></div>
-            ${currentBet > 0
+    <div class="col" style="gap:10px">
+      <div class="row" style="align-items:center;gap:12px">
+        <div class="bet-spot" id="${idPrefix}-bet-spot" title="Click or drag chips here">
+          <div class="bet-spot-ring"></div>
+          ${currentBet > 0
         ? `<div class="bet-spot-pile">${pileHtml}</div><span class="bet-spot-amt">${fmt(currentBet)}</span>`
         : `<span class="bet-spot-amt empty">Place<br>Bet</span>`}
+        </div>
+        <div class="col grow" style="gap:6px">
+          <div class="row">
+            <input type="text" id="${idPrefix}-bet-text" value="${fmt(currentBet)}"
+                   placeholder="e.g. 1.5m, 100k, 1b" ${disabled ? "disabled" : ""} />
+            <span class="muted">tokens · max ${fmt(MAX_BET)}</span>
           </div>
-          <div class="col grow" style="gap:6px">
-            <div class="row">
-              <input type="text" id="${idPrefix}-bet-text" value="${fmt(currentBet)}"
-                     placeholder="e.g. 1.5m, 100k, 1b" ${disabled ? "disabled" : ""} />
-              <span class="muted">tokens · max ${fmt(MAX_BET)}</span>
-            </div>
+        </div>
+      </div>
+
+      <div class="chip-select" id="${idPrefix}-chip-select">
+        ${CHIP_DENOMS.map((v) => `
+          <div class="chip-btn ${v === selectedChip ? "selected" : ""}"
+               data-chip="${v}"
+               ${disabled ? "" : 'draggable="true"'}
+               style="${chipStyle(v)}">
+            <span class="chip-face">${chipLabel(v)}</span>
           </div>
-        </div>
-        <div class="chip-select" id="${idPrefix}-chip-select">
-          ${CHIP_DENOMS.map((v) => `
-            <div class="chip-btn" data-chip="${v}" ${disabled ? "" : 'draggable="true"'} style="${chipStyle(v)}">
-              <span class="chip-face">${chipLabel(v)}</span>
-            </div>
-          `).join("")}
-        </div>
-        <div class="row">
-          <button class="btn small gold" id="${idPrefix}-bet-max" ${disabled ? "disabled" : ""}>Max</button>
-          <button class="btn small" id="${idPrefix}-bet-clear" ${disabled ? "disabled" : ""}>Clear</button>
-        </div>
-      </div>`;
+        `).join("")}
+      </div>
+
+      <div class="row" style="gap:8px;flex-wrap:wrap">
+        <button class="btn small gold" id="${idPrefix}-bet-max" ${disabled ? "disabled" : ""}>Max</button>
+        <button class="btn small" id="${idPrefix}-bet-clear" ${disabled ? "disabled" : ""}>Clear</button>
+        ${showDecrement
+        ? `<button class="btn small" id="${idPrefix}-bet-minus" ${disabled ? "disabled" : ""}>− ${chipLabel(selectedChip)}</button>`
+        : ""}
+        ${showDouble
+        ? `<button class="btn small gold" id="${idPrefix}-bet-double" ${disabled ? "disabled" : ""}>2× Selected Bet</button>`
+        : ""}
+      </div>
+    </div>`;
   }
 
   // Wires up the markup from renderBetControls(). `getBet`/`setBet` should
@@ -247,61 +268,126 @@
   // since more than one can be on screen at once (e.g. live mode's main
   // bet and behind-bet panels).
   const chipScrollPositions = {};
-  function wireBetControls(root, idPrefix, getBet, setBet) {
+  function wireBetControls(root, idPrefix, getBet, setBet, opts = {}) {
+    const {
+      getSelectedChip = () => CHIP_DENOMS[0],
+      setSelectedChip = () => { },
+      onClear = null,
+      minBet = MIN_BET,
+      maxBet = MAX_BET,
+    } = opts;
+
     const input = root.querySelector(`#${idPrefix}-bet-text`);
     if (input) {
       input.addEventListener("change", (e) => {
         const parsed = parseAmount(e.target.value);
-        setBet(!isNaN(parsed) ? clamp(parsed, MIN_BET, MAX_BET) : getBet());
+        setBet(!isNaN(parsed) ? clamp(parsed, minBet, maxBet) : getBet());
       });
     }
+
     const betSpot = root.querySelector(`#${idPrefix}-bet-spot`);
-    root.querySelectorAll(`[data-chip]`).forEach((chip) => {
-      const addChip = () => setBet(clamp(getBet() + parseInt(chip.dataset.chip, 10), MIN_BET, MAX_BET));
+
+    root.querySelectorAll(`#${idPrefix}-chip-select [data-chip]`).forEach((chip) => {
+      const chipValue = parseInt(chip.dataset.chip, 10);
+
+      const addChip = () => {
+        setSelectedChip(chipValue);
+        setBet(clamp(getBet() + chipValue, 0, maxBet));
+      };
+
       chip.addEventListener("click", addChip);
+
       chip.addEventListener("dragstart", (e) => {
+        setSelectedChip(chipValue);
         e.dataTransfer.setData("text/plain", chip.dataset.chip);
         e.dataTransfer.effectAllowed = "copy";
-        // Chips are pure CSS (gradients, no <img>), so without an explicit
-        // drag image some browsers fall back to a generic/broken-icon-style
-        // ghost while dragging. Cloning the chip into an offscreen element
-        // and using it as the drag image gives a clean chip-shaped preview
-        // instead.
+
         const ghost = chip.cloneNode(true);
         ghost.style.position = "absolute";
         ghost.style.top = "-1000px";
         ghost.style.left = "-1000px";
         ghost.style.pointerEvents = "none";
         document.body.appendChild(ghost);
-        e.dataTransfer.setDragImage(ghost, ghost.offsetWidth / 2, ghost.offsetHeight / 2);
+
+        e.dataTransfer.setDragImage(
+          ghost,
+          ghost.offsetWidth / 2,
+          ghost.offsetHeight / 2
+        );
+
         setTimeout(() => ghost.remove(), 0);
         chip.classList.add("dragging");
       });
-      chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+
+      chip.addEventListener("dragend", () => {
+        chip.classList.remove("dragging");
+      });
     });
+
     if (betSpot) {
-      betSpot.addEventListener("dragover", (e) => { e.preventDefault(); betSpot.classList.add("drag-over"); });
-      betSpot.addEventListener("dragleave", () => betSpot.classList.remove("drag-over"));
+      betSpot.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        betSpot.classList.add("drag-over");
+      });
+
+      betSpot.addEventListener("dragleave", () => {
+        betSpot.classList.remove("drag-over");
+      });
+
       betSpot.addEventListener("drop", (e) => {
         e.preventDefault();
         betSpot.classList.remove("drag-over");
-        const amt = parseInt(e.dataTransfer.getData("text/plain"), 10);
-        if (!isNaN(amt)) setBet(clamp(getBet() + amt, MIN_BET, MAX_BET));
+
+        const amount = parseInt(e.dataTransfer.getData("text/plain"), 10);
+        if (!isNaN(amount)) {
+          setSelectedChip(amount);
+          setBet(clamp(getBet() + amount, 0, maxBet));
+        }
       });
     }
+
     const maxBtn = root.querySelector(`#${idPrefix}-bet-max`);
-    if (maxBtn) maxBtn.addEventListener("click", () => setBet(clamp(Math.floor(Balance.current), MIN_BET, MAX_BET)));
+    if (maxBtn) {
+      maxBtn.addEventListener("click", () => {
+        setBet(clamp(Math.floor(Balance.current), minBet, maxBet));
+      });
+    }
+
     const clearBtn = root.querySelector(`#${idPrefix}-bet-clear`);
-    if (clearBtn) clearBtn.addEventListener("click", () => setBet(0));
+    if (clearBtn) {
+      clearBtn.addEventListener("click", () => {
+        if (onClear) onClear();
+        else setBet(0);
+      });
+    }
+
+    const minusBtn = root.querySelector(`#${idPrefix}-bet-minus`);
+    if (minusBtn) {
+      minusBtn.addEventListener("click", () => {
+        setBet(Math.max(0, getBet() - getSelectedChip()));
+      });
+    }
+
+    const doubleBtn = root.querySelector(`#${idPrefix}-bet-double`);
+    if (doubleBtn) {
+      doubleBtn.addEventListener("click", () => {
+        setBet(clamp(getBet() * 2, 0, maxBet));
+      });
+    }
+
     const chipSelect = root.querySelector(`#${idPrefix}-chip-select`);
     if (chipSelect) {
-      chipSelect.scrollLeft = chipScrollPositions[idPrefix] || 0; // restore after the DOM rebuild reset it to 0
+      chipSelect.scrollLeft = chipScrollPositions[idPrefix] || 0;
+
       chipSelect.addEventListener("wheel", (e) => {
-        if (chipSelect.scrollWidth <= chipSelect.clientWidth) return; // nothing to scroll
+        if (chipSelect.scrollWidth <= chipSelect.clientWidth) return;
         e.preventDefault();
         chipSelect.scrollLeft += e.deltaY;
       }, { passive: false });
-      chipSelect.addEventListener("scroll", () => { chipScrollPositions[idPrefix] = chipSelect.scrollLeft; });
+
+      chipSelect.addEventListener("scroll", () => {
+        chipScrollPositions[idPrefix] = chipSelect.scrollLeft;
+      });
     }
   }
 
@@ -830,6 +916,14 @@
         -webkit-user-drag:element; user-select:none; -webkit-user-select:none; touch-action:none;
       }
       #${OVERLAY_ID} .chip-btn:hover{ transform:translateY(-3px); box-shadow:0 6px 12px rgba(0,0,0,.55), inset 0 0 0 3px rgba(255,255,255,.18); }
+      #${OVERLAY_ID} .chip-btn.selected{
+        transform:translateY(-3px);
+        border-color:var(--gold-bright);
+        box-shadow:
+          0 0 0 3px rgba(244,207,101,.48),
+          0 0 16px rgba(244,207,101,.42),
+          0 6px 12px rgba(0,0,0,.55);
+      }
       #${OVERLAY_ID} .chip-btn:active, #${OVERLAY_ID} .chip-btn.dragging{ cursor:grabbing; transform:scale(.94); opacity:.85; }
       #${OVERLAY_ID} .chip-btn .chip-face{
         width:36px; height:36px; border-radius:50%; background:rgba(0,0,0,.28); border:1px dashed rgba(255,255,255,.5);

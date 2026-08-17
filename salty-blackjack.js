@@ -847,6 +847,9 @@
             <div class="ov-hint">Click a seat, then place chips below</div>
             ${seatPickHtml}
           </div>
+          <div class="ov-bet-rail">
+            ${betRailHtml}
+          </div>
         <div class="ov-chip-rail">
             ${renderBetControls(
           "sbj",

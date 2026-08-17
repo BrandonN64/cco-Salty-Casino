@@ -204,6 +204,8 @@
       selectedChip = CHIP_DENOMS[0],
       showDouble = true,
       showDecrement = true,
+      showBetSpot = true,
+      showInput = true,
     } = opts;
 
     const pileN = currentBet > 0
@@ -216,21 +218,28 @@
 
     return `
     <div class="col" style="gap:10px">
-      <div class="row" style="align-items:center;gap:12px">
-        <div class="bet-spot" id="${idPrefix}-bet-spot" title="Click or drag chips here">
-          <div class="bet-spot-ring"></div>
-          ${currentBet > 0
-        ? `<div class="bet-spot-pile">${pileHtml}</div><span class="bet-spot-amt">${fmt(currentBet)}</span>`
-        : `<span class="bet-spot-amt empty">Place<br>Bet</span>`}
-        </div>
-        <div class="col grow" style="gap:6px">
-          <div class="row">
-            <input type="text" id="${idPrefix}-bet-text" value="${fmt(currentBet)}"
+      ${showBetSpot || showInput ? `
+        <div class="row" style="align-items:center;gap:12px">
+          ${showBetSpot ? `
+            <div class="bet-spot" id="${idPrefix}-bet-spot" title="Click or drag chips here">
+              <div class="bet-spot-ring"></div>
+              ${currentBet > 0
+                ? `<div class="bet-spot-pile">${pileHtml}</div><span class="bet-spot-amt">${fmt(currentBet)}</span>`
+                : `<span class="bet-spot-amt empty">Place<br>Bet</span>`}
+            </div>
+          ` : ""}
+
+          ${showInput ? `
+            <div class="col grow" style="gap:6px">
+              <div class="row">
+                <input type="text" id="${idPrefix}-bet-text" value="${fmt(currentBet)}"
                    placeholder="e.g. 1.5m, 100k, 1b" ${disabled ? "disabled" : ""} />
-            <span class="muted">tokens · max ${fmt(MAX_BET)}</span>
-          </div>
+                <span class="muted">tokens · max ${fmt(MAX_BET)}</span>
+              </div>
+            </div>
+          ` : ""}
         </div>
-      </div>
+      ` : ""}
 
       <div class="chip-select" id="${idPrefix}-chip-select">
         ${CHIP_DENOMS.map((v) => `

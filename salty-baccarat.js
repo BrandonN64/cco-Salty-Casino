@@ -784,7 +784,11 @@
           "bac",
           state.bets[state.activeBetTarget] || 0,
           busy,
-          { selectedChip: state.selectedChip }
+          { 
+            selectedChip: state.selectedChip,
+            showBetSpot: false,
+            showInput: false,
+           }
         )}
 
             <div class="row center" style="gap:10px;flex-wrap:wrap;margin-top:10px">
@@ -806,21 +810,26 @@
         });
 
         root.querySelectorAll(".ov-bet-spot, .bac-side-spot").forEach((spot) => {
-          spot.addEventListener("click", () => { state.activeBetTarget = spot.dataset.target; render(); });
-          spot.addEventListener("dragover", (e) => { e.preventDefault(); spot.classList.add("drag-over"); });
-          spot.addEventListener("dragleave", () => spot.classList.remove("drag-over"));
           spot.addEventListener("drop", (e) => {
             e.preventDefault();
             spot.classList.remove("drag-over");
+
             const key = spot.dataset.target;
             const amt = parseInt(e.dataTransfer.getData("text/plain"), 10);
-            if (!isNaN(amt)) {
-              state, activeBetTarget = key;
-              state.selectedChip = amt;
-              if (MAIN_BET_KEYS.includes(key)) clearOtherMainBets(key);
-              state.bets[key] = clamp(state.bets[key] + amt, 0, MAX_BET);
-              render();
+
+            if (isNaN(amt)) return;
+
+            // The dropped-on location becomes the active target.
+            state.activeBetTarget = key;
+            state.selectedChip = amt;
+
+            // Player / Banker / Tie remain mutually exclusive.
+            if (MAIN_BET_KEYS.includes(key)) {
+              clearOtherMainBets(key);
             }
+
+            state.bets[key] = clamp(state.bets[key] + amt, 0, MAX_BET);
+            render();
           });
         });
         wireBetControls(

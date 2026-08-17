@@ -1223,11 +1223,11 @@
     });
   }
 
-    function goHome() {
+  function goHome() {
     activeTab = null;
 
     if (activeUnmount) {
-      try { activeUnmount(); } catch {}
+      try { activeUnmount(); } catch { }
       activeUnmount = null;
     }
 
@@ -1252,7 +1252,7 @@
     activeTab = key;
 
     if (activeUnmount) {
-      try { activeUnmount(); } catch {}
+      try { activeUnmount(); } catch { }
       activeUnmount = null;
     }
 
@@ -1296,7 +1296,7 @@
       // This is a genuine casino close, so let the active module run its
       // normal cleanup handler once.
       if (activeUnmount) {
-        try { activeUnmount(); } catch {}
+        try { activeUnmount(); } catch { }
         activeUnmount = null;
       }
 
@@ -1311,7 +1311,7 @@
   // ---------------------------------------------------------------------
   const SLOT_ICON = `<img src="https://raw.githubusercontent.com/BrandonN64/cco-Salty-Casino/39d4354e067ea8d066796a48d2aa582eb1376a86/Salty's%20Casino.png" alt="Salty's Casino">`;
 
-    function ensureIconLauncher() {
+  function ensureIconLauncher() {
     if (window.location.pathname !== "/games") return;
     if (document.getElementById(LAUNCH_ID)) return;
     ensureStyle();

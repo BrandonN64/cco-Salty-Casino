@@ -1070,10 +1070,13 @@
 
       #${LAUNCH_ID} .saltys-icon-btn{
         width:100%; height:100%; border:none; background:transparent; cursor:pointer;
-        display:flex; align-items:center; justify-content:center; padding:20px;
+        display:flex; align-items:center; justify-content:center; padding:4px;
       }
-      #${LAUNCH_ID} .saltys-icon-btn img{ width:100%; height:100%; max-width:150px; max-height:150px; object-fit:contain; transition:transform .15s ease; }
-      #${LAUNCH_ID} .saltys-icon-btn:hover img{ transform:scale(1.05); }
+      #${LAUNCH_ID} .saltys-icon-btn img{
+        width:100%; height:100%; object-fit:cover; border-radius:10px;
+        border:2px solid var(--gold, #d4af37); transition:transform .15s ease;
+      }
+      #${LAUNCH_ID} .saltys-icon-btn:hover img{ transform:scale(1.02); }
     `;
     document.head.appendChild(s);
   }

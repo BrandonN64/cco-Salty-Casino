@@ -33,7 +33,7 @@
   const {
     MIN_BET, MAX_BET, GAME_MODULES, OVERLAY_ID,
     Balance, Shoe, cardColor, SUIT_GLYPH, bacHandTotal,
-    clamp, delay, fmt, chipColor, chipStyle, chipLabel, CHIP_DENOMS, toast,
+    clamp, delay, fmt, chipColor, chipStyle, renderBetControls, wireBetControls, toast,
   } = window.SaltyCore;
 
   const DECK_COUNT = 8;
@@ -393,6 +393,7 @@
         bets: { player: 0, banker: 0, tie: 0, playerPair: 0, bankerPair: 0, perfectPair: 0, big: 0, small: 0 },
         jackpotBet: false,
         activeBetTarget: "player",
+        selectedChip: 100,
         player: [], banker: [], playerTotal: 0, bankerTotal: 0,
         playerNatural: false, bankerNatural: false, winner: null,
         revealedKeys: new Set(),
@@ -733,20 +734,20 @@
             </div>
             ${renderBettingSpots()}
             <div class="ov-chip-rail">
-              <div class="chip-select">
-                ${CHIP_DENOMS.map((v) => `
-                  <div class="chip-btn" data-chip="${v}" ${busy ? "" : 'draggable="true"'} style="${chipStyle(v)}">
-                    <span class="chip-face">${chipLabel(v)}</span>
-                  </div>
-                `).join("")}
-              </div>
-              <div class="row center" style="gap:10px;flex-wrap:wrap">
-                <button class="btn small gold" id="bac-bet-max" ${busy ? "disabled" : ""}>Max</button>
-                <button class="btn small" id="bac-bet-clear" ${busy ? "disabled" : ""}>Clear</button>
-                <span class="muted">Total wager: ${fmt(wager)}</span>
-                <button class="btn primary" id="bac-deal" ${busy || !wager ? "disabled" : ""}>Deal</button>
-              </div>
-            </div></div>`;
+              ${renderBetControls(
+          "bac",
+          state.bets[state.activeBetTarget] || 0,
+          busy,
+          { selectedChip: state.selectedChip }
+        )}
+
+            <div class="row center" style="gap:10px;flex-wrap:wrap;margin-top:10px">
+              <span class="muted">Total wager: ${fmt(wager)}</span>
+              <button class="btn primary" id="bac-deal" ${busy || !wager ? "disabled" : ""}>
+              Deal
+              </button>
+            </div>
+          </div></div>`;
         wireRulesButton(root);
         wireSoundToggle(root, render);
         wireFaceDownToggle(root, render);
@@ -768,58 +769,44 @@
             const key = spot.dataset.target;
             const amt = parseInt(e.dataTransfer.getData("text/plain"), 10);
             if (!isNaN(amt)) {
+              state.selectedChip = amt;
               if (MAIN_BET_KEYS.includes(key)) clearOtherMainBets(key);
               state.bets[key] = clamp(state.bets[key] + amt, 0, MAX_BET);
               render();
             }
           });
         });
-        root.querySelectorAll("[data-chip]").forEach((chip) => {
-          const addChip = () => {
-            const t = state.activeBetTarget;
-            if (MAIN_BET_KEYS.includes(t)) clearOtherMainBets(t);
-            state.bets[t] = clamp(state.bets[t] + parseInt(chip.dataset.chip, 10), 0, MAX_BET);
+        wireBetControls(
+          root,
+          "bac",
+          () => state.bets[state.activeBetTarget] || 0,
+          (value) => {
+            const target = state.activeBetTarget;
+
+            // Player, Banker, and Tie are mutually exclusive on this table.
+            if (MAIN_BET_KEYS.includes(target) && value > 0) {
+              clearOtherMainBets(target);
+            }
+
+            state.bets[target] = value;
             render();
-          };
-          chip.addEventListener("click", addChip);
-          chip.addEventListener("dragstart", (e) => {
-            e.dataTransfer.setData("text/plain", chip.dataset.chip);
-            e.dataTransfer.effectAllowed = "copy";
-            const ghost = chip.cloneNode(true);
-            ghost.style.position = "absolute"; ghost.style.top = "-1000px"; ghost.style.left = "-1000px"; ghost.style.pointerEvents = "none";
-            document.body.appendChild(ghost);
-            e.dataTransfer.setDragImage(ghost, ghost.offsetWidth / 2, ghost.offsetHeight / 2);
-            setTimeout(() => ghost.remove(), 0);
-          });
-        });
-        // Chip trays are rebuilt from scratch (root.innerHTML = ...) on
-        // every bet change, which resets a fresh element's scrollLeft to
-        // 0 — losing your place in the tray every single click. Restore
-        // it from the module-level variable, same fix salty-core.js's
-        // wireBetControls() applies for Blackjack's bet controls.
-        const chipSelect = root.querySelector(".chip-select");
-        if (chipSelect) {
-          chipSelect.scrollLeft = chipScrollPos;
-          chipSelect.addEventListener("wheel", (e) => {
-            if (chipSelect.scrollWidth <= chipSelect.clientWidth) return;
-            e.preventDefault();
-            chipSelect.scrollLeft += e.deltaY;
-          }, { passive: false });
-          chipSelect.addEventListener("scroll", () => { chipScrollPos = chipSelect.scrollLeft; });
-        }
-        const maxBtn = root.querySelector("#bac-bet-max");
-        if (maxBtn) maxBtn.addEventListener("click", () => {
-          const t = state.activeBetTarget;
-          if (MAIN_BET_KEYS.includes(t)) clearOtherMainBets(t);
-          state.bets[t] = clamp(Math.floor(Balance.current), 0, MAX_BET);
-          render();
-        });
-        const clearBtn = root.querySelector("#bac-bet-clear");
-        if (clearBtn) clearBtn.addEventListener("click", () => {
-          Object.keys(state.bets).forEach((k) => (state.bets[k] = 0));
-          state.jackpotBet = false;
-          render();
-        });
+          },
+          {
+            getSelectedChip: () => state.selectedChip,
+            setSelectedChip: (value) => {
+              state.selectedChip = value;
+            },
+            onClear: () => {
+              Object.keys(state.bets).forEach((key) => {
+                state.bets[key] = 0;
+              });
+              state.jackpotBet = false;
+              render();
+            },
+            minBet: 0,
+            maxBet: MAX_BET,
+          }
+        );
         const dealBtn = root.querySelector("#bac-deal");
         if (dealBtn) dealBtn.addEventListener("click", startDeal);
         return;

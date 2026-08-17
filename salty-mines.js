@@ -412,29 +412,35 @@
         if (state.autoStopOnLoss > 0 && state.autoCumulativeProfit <= -state.autoStopOnLoss) { state.autoRunning = false; break; }
         if (!state.autoRunning) break;
 
-        state.phase = "betting"; // reset for the next scripted round
+        state.phase = "betting";
+        state.minePositions = null;
+        state.revealed = [];
+        state.picks = 0;
+        state.lastResult = null;
+
         render();
         await delay(AUTO_ROUND_GAP_MS);
+
+        if (!state.autoRunning) break;
+
+        state.autoRunning = false;
+        render();
       }
 
-      state.autoRunning = false;
-      render();
-    }
+      function stopAutoplay() {
+        state.autoRunning = false;
+        render();
+      }
 
-    function stopAutoplay() {
-      state.autoRunning = false;
-      render();
-    }
+      function render() {
+        if (!root) return;
+        ensureMinesSharedStyle();
+        const jackpotBanner = `<div class="mines-jackpot-banner" id="mines-jackpot-banner">PROGRESSIVE JACKPOT: ${fmtJackpot(jackpotAmount)}</div>`;
+        const inRound = state.phase === "playing" || state.phase === "settled";
+        const showMines = state.phase === "settled" && state.lastResult && state.lastResult.outcome === "mine";
+        const staging = state.phase === "betting" && state.autoMode;
 
-    function render() {
-      if (!root) return;
-      ensureMinesSharedStyle();
-      const jackpotBanner = `<div class="mines-jackpot-banner" id="mines-jackpot-banner">PROGRESSIVE JACKPOT: ${fmtJackpot(jackpotAmount)}</div>`;
-      const inRound = state.phase === "playing" || state.phase === "settled";
-      const showMines = state.phase === "settled" && state.lastResult && state.lastResult.outcome === "mine";
-      const staging = state.phase === "betting" && state.autoMode;
-
-      const boardHtml = `<div class="mines-board">
+        const boardHtml = `<div class="mines-board">
         ${Array.from({ length: GRID_SIZE }, (_, i) => i).map((i) => {
           const isRevealed = state.revealed.includes(i);
           const isMine = inRound && state.minePositions && state.minePositions.has(i);
@@ -450,23 +456,23 @@
         }).join("")}
       </div>`;
 
-      const liveMultHtml = state.phase === "playing" ? `<div class="mines-live-mult">
+        const liveMultHtml = state.phase === "playing" ? `<div class="mines-live-mult">
         ${multiplierFor(state.mines, state.picks).toFixed(2)}x
         <span class="muted">${state.picks} safe tile${state.picks === 1 ? "" : "s"} revealed · next pays ${multiplierFor(state.mines, state.picks + 1).toFixed(2)}x</span>
       </div>` : "";
 
-      const summaryHtml = state.phase === "settled" && state.lastResult ? (() => {
-        const r = state.lastResult;
-        const cls = r.totalProfit > 0 ? "win" : r.totalProfit < 0 ? "lose" : "push";
-        const headline = r.outcome === "mine" ? "Boom — You Lose" : r.outcome === "clear" ? "Full Clear!" : "Cashed Out";
-        return `<div class="mines-round-summary ${cls}">
+        const summaryHtml = state.phase === "settled" && state.lastResult ? (() => {
+          const r = state.lastResult;
+          const cls = r.totalProfit > 0 ? "win" : r.totalProfit < 0 ? "lose" : "push";
+          const headline = r.outcome === "mine" ? "Boom — You Lose" : r.outcome === "clear" ? "Full Clear!" : "Cashed Out";
+          return `<div class="mines-round-summary ${cls}">
           <div class="mines-round-summary-headline">${headline}</div>
           <div class="muted" style="margin-bottom:6px">${r.picks} of ${GRID_SIZE - r.mines} safe tiles · ${r.mult.toFixed(2)}x</div>
           <div class="ov-summary-line total"><span>Total</span><span>${r.totalProfit >= 0 ? "+" : ""}${fmt(r.totalProfit)}</span></div>
         </div>`;
-      })() : "";
+        })() : "";
 
-      const autoStatusHtml = state.autoRunning ? `<div class="mines-auto-status">
+        const autoStatusHtml = state.autoRunning ? `<div class="mines-auto-status">
         Autoplay running — round ${state.autoRoundsPlayed + 1} of ${state.autoRoundsTotal}
         <span class="muted">Cumulative: ${state.autoCumulativeProfit >= 0 ? "+" : ""}${fmt(state.autoCumulativeProfit)}</span>
       </div>` : (state.autoRoundsPlayed > 0 && !state.autoRunning && state.phase === "betting" ? `<div class="mines-auto-status">
@@ -474,9 +480,9 @@
         <span class="muted">Cumulative: ${state.autoCumulativeProfit >= 0 ? "+" : ""}${fmt(state.autoCumulativeProfit)}</span>
       </div>` : "");
 
-      let controlsHtml;
-      if (state.phase === "betting") {
-        const autoPanelHtml = state.autoMode ? `<div class="mines-auto-panel">
+        let controlsHtml;
+        if (state.phase === "betting") {
+          const autoPanelHtml = state.autoMode ? `<div class="mines-auto-panel">
           <div class="muted" style="font-size:12px">Click tiles on the board above to stage them — they'll auto-reveal in that order every round.</div>
           <div class="mines-auto-row">
             <label>Rounds to play</label>
@@ -496,7 +502,7 @@
               : `<button class="btn primary" id="mines-auto-start" ${!state.autoStagedTiles.length || !state.bet ? "disabled" : ""}>Start Autoplay</button>`}
           </div>
         </div>` : "";
-        controlsHtml = `
+          controlsHtml = `
           <div class="mines-panel">
             <div class="mines-mine-picker">
               <span class="muted">Mines</span>
@@ -527,177 +533,177 @@
               ${!state.autoMode ? `<button class="btn primary" id="mines-start" ${busy || !state.bet ? "disabled" : ""}>Start</button>` : ""}
             </div>
           </div>`;
-      } else if (state.phase === "playing") {
-        controlsHtml = `<div class="row center mt16">
+        } else if (state.phase === "playing") {
+          controlsHtml = `<div class="row center mt16">
           <button class="btn primary" id="mines-cashout" ${busy || state.picks === 0 ? "disabled" : ""} title="${state.picks === 0 ? "Reveal at least one safe tile first" : ""}">Cash Out ${multiplierFor(state.mines, state.picks).toFixed(2)}x</button>
         </div>`;
-      } else {
-        controlsHtml = state.autoRunning ? "" : `<div class="row center mt16">
+        } else {
+          controlsHtml = state.autoRunning ? "" : `<div class="row center mt16">
           <button class="btn primary" id="mines-rebet">Rebet ${fmt(state.bet)}${state.jackpotOn ? " + jackpot" : ""}</button>
           <button class="btn" id="mines-again">Change Bet</button>
         </div>`;
-      }
-
-      root.innerHTML = jackpotBanner + rulesButtonRowHtml() + boardHtml + liveMultHtml + summaryHtml + autoStatusHtml + controlsHtml;
-      wireRulesButton(root);
-
-      if (state.phase === "playing") {
-        root.querySelectorAll("[data-tile]").forEach((tile) => {
-          tile.addEventListener("click", () => revealTile(parseInt(tile.dataset.tile, 10)));
-        });
-        const cashoutBtn = root.querySelector("#mines-cashout");
-        if (cashoutBtn) cashoutBtn.addEventListener("click", cashOut);
-      }
-
-      if (state.phase === "betting") {
-        if (staging) {
-          root.querySelectorAll("[data-tile]").forEach((tile) => {
-            tile.addEventListener("click", () => toggleAutoTile(parseInt(tile.dataset.tile, 10)));
-          });
         }
-        const autoToggle = root.querySelector("#mines-auto-toggle");
-        if (autoToggle) autoToggle.addEventListener("click", () => { state.autoMode = !state.autoMode; render(); });
-        const autoRoundsInput = root.querySelector("#mines-auto-rounds");
-        if (autoRoundsInput) autoRoundsInput.addEventListener("change", (e) => {
-          state.autoRoundsTotal = clamp(parseInt(e.target.value, 10) || AUTO_DEFAULT_ROUNDS, 1, 500);
-          render();
-        });
-        const autoStopProfitInput = root.querySelector("#mines-auto-stop-profit");
-        if (autoStopProfitInput) autoStopProfitInput.addEventListener("change", (e) => {
-          state.autoStopOnProfit = Math.max(0, parseInt(e.target.value, 10) || 0);
-          render();
-        });
-        const autoStopLossInput = root.querySelector("#mines-auto-stop-loss");
-        if (autoStopLossInput) autoStopLossInput.addEventListener("change", (e) => {
-          state.autoStopOnLoss = Math.max(0, parseInt(e.target.value, 10) || 0);
-          render();
-        });
-        const autoStartBtn = root.querySelector("#mines-auto-start");
-        if (autoStartBtn) autoStartBtn.addEventListener("click", runAutoplay);
-        const autoStopBtn = root.querySelector("#mines-auto-stop");
-        if (autoStopBtn) autoStopBtn.addEventListener("click", stopAutoplay);
 
-        const slider = root.querySelector("#mines-count-slider");
-        if (slider) slider.addEventListener("input", (e) => {
-          state.mines = clamp(parseInt(e.target.value, 10), MIN_MINES, MAX_MINES);
-          render();
-        });
-        const jackpotToggle = root.querySelector("#mines-jackpot-toggle");
-        if (jackpotToggle) jackpotToggle.addEventListener("click", () => {
-          if (!state.jackpotOn && JACKPOT_SIDE_BET > Balance.current) {
-            toast("Not enough balance for the jackpot bet.");
-            return;
+        root.innerHTML = jackpotBanner + rulesButtonRowHtml() + boardHtml + liveMultHtml + summaryHtml + autoStatusHtml + controlsHtml;
+        wireRulesButton(root);
+
+        if (state.phase === "playing") {
+          root.querySelectorAll("[data-tile]").forEach((tile) => {
+            tile.addEventListener("click", () => revealTile(parseInt(tile.dataset.tile, 10)));
+          });
+          const cashoutBtn = root.querySelector("#mines-cashout");
+          if (cashoutBtn) cashoutBtn.addEventListener("click", cashOut);
+        }
+
+        if (state.phase === "betting") {
+          if (staging) {
+            root.querySelectorAll("[data-tile]").forEach((tile) => {
+              tile.addEventListener("click", () => toggleAutoTile(parseInt(tile.dataset.tile, 10)));
+            });
           }
-          state.jackpotOn = !state.jackpotOn;
-          render();
-        });
-        root.querySelectorAll("[data-chip]").forEach((chip) => {
-          chip.addEventListener("click", () => {
-            state.bet = clamp(state.bet + parseInt(chip.dataset.chip, 10), MIN_BET, MAX_BET);
+          const autoToggle = root.querySelector("#mines-auto-toggle");
+          if (autoToggle) autoToggle.addEventListener("click", () => { state.autoMode = !state.autoMode; render(); });
+          const autoRoundsInput = root.querySelector("#mines-auto-rounds");
+          if (autoRoundsInput) autoRoundsInput.addEventListener("change", (e) => {
+            state.autoRoundsTotal = clamp(parseInt(e.target.value, 10) || AUTO_DEFAULT_ROUNDS, 1, 500);
             render();
           });
-          chip.addEventListener("dragstart", (e) => {
-            e.dataTransfer.setData("text/plain", chip.dataset.chip);
-            e.dataTransfer.effectAllowed = "copy";
-            const ghost = chip.cloneNode(true);
-            ghost.style.position = "absolute"; ghost.style.top = "-1000px"; ghost.style.left = "-1000px"; ghost.style.pointerEvents = "none";
-            document.body.appendChild(ghost);
-            e.dataTransfer.setDragImage(ghost, ghost.offsetWidth / 2, ghost.offsetHeight / 2);
-            setTimeout(() => ghost.remove(), 0);
+          const autoStopProfitInput = root.querySelector("#mines-auto-stop-profit");
+          if (autoStopProfitInput) autoStopProfitInput.addEventListener("change", (e) => {
+            state.autoStopOnProfit = Math.max(0, parseInt(e.target.value, 10) || 0);
+            render();
           });
-        });
-        const chipSelect = root.querySelector(".chip-select");
-        if (chipSelect) {
-          chipSelect.scrollLeft = chipScrollPos;
-          chipSelect.addEventListener("wheel", (e) => {
-            if (chipSelect.scrollWidth <= chipSelect.clientWidth) return;
-            e.preventDefault();
-            chipSelect.scrollLeft += e.deltaY;
-          }, { passive: false });
-          chipSelect.addEventListener("scroll", () => { chipScrollPos = chipSelect.scrollLeft; });
-        }
-        const maxBtn = root.querySelector("#mines-bet-max");
-        if (maxBtn) maxBtn.addEventListener("click", () => {
-          state.bet = clamp(Math.floor(Balance.current), MIN_BET, MAX_BET);
-          render();
-        });
-        const clearBtn = root.querySelector("#mines-bet-clear-amt");
-        if (clearBtn) clearBtn.addEventListener("click", () => {
-          state.bet = 0;
-          render();
-        });
-        const startBtn = root.querySelector("#mines-start");
-        if (startBtn) startBtn.addEventListener("click", startRound);
-      } else if (state.phase === "settled" && !state.autoRunning) {
-        const againBtn = root.querySelector("#mines-again");
-        if (againBtn) againBtn.addEventListener("click", () => {
-          const mines = state.mines, bet = state.bet, jp = state.jackpotOn;
-          state = freshState();
-          state.mines = mines;
-          state.bet = bet;
-          state.jackpotOn = jp;
-          render();
-        });
-        const rebetBtn = root.querySelector("#mines-rebet");
-        if (rebetBtn) rebetBtn.addEventListener("click", () => {
-          const mines = state.mines, bet = state.bet, jp = state.jackpotOn;
-          state = freshState();
-          state.mines = mines;
-          state.bet = bet;
-          state.jackpotOn = jp;
-          startRound();
-        });
-      }
-    }
+          const autoStopLossInput = root.querySelector("#mines-auto-stop-loss");
+          if (autoStopLossInput) autoStopLossInput.addEventListener("change", (e) => {
+            state.autoStopOnLoss = Math.max(0, parseInt(e.target.value, 10) || 0);
+            render();
+          });
+          const autoStartBtn = root.querySelector("#mines-auto-start");
+          if (autoStartBtn) autoStartBtn.addEventListener("click", runAutoplay);
+          const autoStopBtn = root.querySelector("#mines-auto-stop");
+          if (autoStopBtn) autoStopBtn.addEventListener("click", stopAutoplay);
 
-    // Closing the tab mid-round shouldn't let the player escape a bad
-    // spot on the board, but it also can't retroactively force a
-    // "decision" the way Blackjack/Three Card Poker can (there's no
-    // fixed action like Stand/Fold to fall back on here — the entire
-    // game IS the decision of whether to keep revealing). The fair
-    // resolution: settle the round as a cash-out at whatever multiplier
-    // was already locked in from safe tiles already revealed, exactly
-    // as if the player had clicked Cash Out right before closing. If no
-    // tiles were revealed yet, that's a 0x cash-out — a full loss of the
-    // bet, same as if you'd walked away from a real table with your
-    // chips still on a board you never touched.
-    async function resolveAbandonedRound() {
-      state.autoRunning = false; // stop any scripted loop first
-      if (!state || state.phase !== "playing") return;
-      if (state.picks > 0) {
-        await settle("cashout", multiplierFor(state.mines, state.picks));
-      } else {
-        await settle("mine", 0);
-      }
-    }
-
-    return {
-      label: "Mines",
-      icon: "💣",
-      order: 6,
-      mount(el) {
-        root = el;
-        state = freshState();
-        if (window.SaltyJackpot) {
-          jackpotUnsub = window.SaltyJackpot.subscribe((pool) => {
-            jackpotAmount = pool.amount;
-            const el2 = document.getElementById("mines-jackpot-banner");
-            if (el2) {
-              el2.textContent = `PROGRESSIVE JACKPOT: ${fmtJackpot(jackpotAmount)}`;
-              el2.classList.add("pulse");
-              setTimeout(() => el2.classList.remove("pulse"), 500);
+          const slider = root.querySelector("#mines-count-slider");
+          if (slider) slider.addEventListener("input", (e) => {
+            state.mines = clamp(parseInt(e.target.value, 10), MIN_MINES, MAX_MINES);
+            render();
+          });
+          const jackpotToggle = root.querySelector("#mines-jackpot-toggle");
+          if (jackpotToggle) jackpotToggle.addEventListener("click", () => {
+            if (!state.jackpotOn && JACKPOT_SIDE_BET > Balance.current) {
+              toast("Not enough balance for the jackpot bet.");
+              return;
             }
+            state.jackpotOn = !state.jackpotOn;
+            render();
+          });
+          root.querySelectorAll("[data-chip]").forEach((chip) => {
+            chip.addEventListener("click", () => {
+              state.bet = clamp(state.bet + parseInt(chip.dataset.chip, 10), MIN_BET, MAX_BET);
+              render();
+            });
+            chip.addEventListener("dragstart", (e) => {
+              e.dataTransfer.setData("text/plain", chip.dataset.chip);
+              e.dataTransfer.effectAllowed = "copy";
+              const ghost = chip.cloneNode(true);
+              ghost.style.position = "absolute"; ghost.style.top = "-1000px"; ghost.style.left = "-1000px"; ghost.style.pointerEvents = "none";
+              document.body.appendChild(ghost);
+              e.dataTransfer.setDragImage(ghost, ghost.offsetWidth / 2, ghost.offsetHeight / 2);
+              setTimeout(() => ghost.remove(), 0);
+            });
+          });
+          const chipSelect = root.querySelector(".chip-select");
+          if (chipSelect) {
+            chipSelect.scrollLeft = chipScrollPos;
+            chipSelect.addEventListener("wheel", (e) => {
+              if (chipSelect.scrollWidth <= chipSelect.clientWidth) return;
+              e.preventDefault();
+              chipSelect.scrollLeft += e.deltaY;
+            }, { passive: false });
+            chipSelect.addEventListener("scroll", () => { chipScrollPos = chipSelect.scrollLeft; });
+          }
+          const maxBtn = root.querySelector("#mines-bet-max");
+          if (maxBtn) maxBtn.addEventListener("click", () => {
+            state.bet = clamp(Math.floor(Balance.current), MIN_BET, MAX_BET);
+            render();
+          });
+          const clearBtn = root.querySelector("#mines-bet-clear-amt");
+          if (clearBtn) clearBtn.addEventListener("click", () => {
+            state.bet = 0;
+            render();
+          });
+          const startBtn = root.querySelector("#mines-start");
+          if (startBtn) startBtn.addEventListener("click", startRound);
+        } else if (state.phase === "settled" && !state.autoRunning) {
+          const againBtn = root.querySelector("#mines-again");
+          if (againBtn) againBtn.addEventListener("click", () => {
+            const mines = state.mines, bet = state.bet, jp = state.jackpotOn;
+            state = freshState();
+            state.mines = mines;
+            state.bet = bet;
+            state.jackpotOn = jp;
+            render();
+          });
+          const rebetBtn = root.querySelector("#mines-rebet");
+          if (rebetBtn) rebetBtn.addEventListener("click", () => {
+            const mines = state.mines, bet = state.bet, jp = state.jackpotOn;
+            state = freshState();
+            state.mines = mines;
+            state.bet = bet;
+            state.jackpotOn = jp;
+            startRound();
           });
         }
-        render();
-        return () => {
-          resolveAbandonedRound();
-          if (jackpotUnsub) jackpotUnsub();
-          root = null;
-        };
-      },
-    };
-  })();
+      }
 
-  window.SaltyCore.GAME_MODULES.mines = SoloMines;
-})();
+      // Closing the tab mid-round shouldn't let the player escape a bad
+      // spot on the board, but it also can't retroactively force a
+      // "decision" the way Blackjack/Three Card Poker can (there's no
+      // fixed action like Stand/Fold to fall back on here — the entire
+      // game IS the decision of whether to keep revealing). The fair
+      // resolution: settle the round as a cash-out at whatever multiplier
+      // was already locked in from safe tiles already revealed, exactly
+      // as if the player had clicked Cash Out right before closing. If no
+      // tiles were revealed yet, that's a 0x cash-out — a full loss of the
+      // bet, same as if you'd walked away from a real table with your
+      // chips still on a board you never touched.
+      async function resolveAbandonedRound() {
+        state.autoRunning = false; // stop any scripted loop first
+        if (!state || state.phase !== "playing") return;
+        if (state.picks > 0) {
+          await settle("cashout", multiplierFor(state.mines, state.picks));
+        } else {
+          await settle("mine", 0);
+        }
+      }
+
+      return {
+        label: "Mines",
+        icon: "💣",
+        order: 6,
+        mount(el) {
+          root = el;
+          state = freshState();
+          if (window.SaltyJackpot) {
+            jackpotUnsub = window.SaltyJackpot.subscribe((pool) => {
+              jackpotAmount = pool.amount;
+              const el2 = document.getElementById("mines-jackpot-banner");
+              if (el2) {
+                el2.textContent = `PROGRESSIVE JACKPOT: ${fmtJackpot(jackpotAmount)}`;
+                el2.classList.add("pulse");
+                setTimeout(() => el2.classList.remove("pulse"), 500);
+              }
+            });
+          }
+          render();
+          return () => {
+            resolveAbandonedRound();
+            if (jackpotUnsub) jackpotUnsub();
+            root = null;
+          };
+        },
+      };
+    }) ();
+
+    window.SaltyCore.GAME_MODULES.mines = SoloMines;
+  })();

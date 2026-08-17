@@ -49,7 +49,7 @@
   };
   const DEALER_STANDS_SOFT_17 = true;
   const SURRENDER_RETURN_FRACTION = 0.5; // late surrender: forfeit half the bet, hand ends immediately
-  const SOLO_MAX_HANDS_PER_SEAT = 4; // original hand + up to 3 splits
+  const SOLO_MAX_HANDS_PER_SEAT = 10; // original hand + up to 9 splits
 
   // Flat, non-scaling qualifying bet for the shared progressive jackpot —
   // matches Baccarat's convention exactly. Placed per hand, since each seat

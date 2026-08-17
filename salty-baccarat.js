@@ -339,6 +339,12 @@
         transition:box-shadow .15s ease, border-color .15s ease, transform .15s ease;
       }
       #${OVERLAY_ID} .bac-side-spot.active{ border-style:solid; border-color:var(--gold-bright); transform:translateY(-2px); box-shadow:0 0 0 3px rgba(212,175,55,.3); }
+      #${OVERLAY_ID} .bac-side-spot.drag-over{
+        border-style:solid;
+        border-color:var(--gold-bright);
+        box-shadow:0 0 0 4px rgba(212,175,55,.42), 0 0 18px rgba(212,175,55,.28);
+        ransform:translateY(-2px) scale(1.03);
+      }
       #${OVERLAY_ID} .bac-side-label{ font:700 10px/1.2 "Oswald",sans-serif; text-transform:uppercase; letter-spacing:.4px; color:var(--text-dim); text-align:center; }
       #${OVERLAY_ID} .bac-side-pay{ font:600 9px/1 "JetBrains Mono",monospace; color:var(--text-dim); }
       #${OVERLAY_ID} .bac-side-amt{ font:700 11px/1.2 "JetBrains Mono",monospace; color:var(--gold-bright); }
@@ -784,11 +790,11 @@
           "bac",
           state.bets[state.activeBetTarget] || 0,
           busy,
-          { 
+          {
             selectedChip: state.selectedChip,
             showBetSpot: false,
             showInput: false,
-           }
+          }
         )}
 
             <div class="row center" style="gap:10px;flex-wrap:wrap;margin-top:10px">
@@ -810,25 +816,51 @@
         });
 
         root.querySelectorAll(".ov-bet-spot, .bac-side-spot").forEach((spot) => {
+          const selectTarget = () => {
+            state.activeBetTarget = spot.dataset.target;
+            render();
+          };
+
+          spot.addEventListener("click", selectTarget);
+
+          spot.addEventListener("dragenter", (e) => {
+            e.preventDefault();
+            spot.classList.add("drag-over");
+          });
+
+          spot.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+            spot.classList.add("drag-over");
+          });
+
+          spot.addEventListener("dragleave", (e) => {
+            // Ignore dragleave events caused by entering a child label/amount
+            // inside the same betting spot.
+            if (spot.contains(e.relatedTarget)) return;
+            spot.classList.remove("drag-over");
+          });
+
           spot.addEventListener("drop", (e) => {
             e.preventDefault();
+            e.stopPropagation();
             spot.classList.remove("drag-over");
 
             const key = spot.dataset.target;
-            const amt = parseInt(e.dataTransfer.getData("text/plain"), 10);
+            const amount = Number(e.dataTransfer.getData("text/plain"));
 
-            if (isNaN(amt)) return;
+            if (!Number.isFinite(amount) || amount <= 0) return;
 
-            // The dropped-on location becomes the active target.
+            // Direct drop chooses that spot as the selected wager.
             state.activeBetTarget = key;
-            state.selectedChip = amt;
+            state.selectedChip = amount;
 
-            // Player / Banker / Tie remain mutually exclusive.
+            // Baccarat's three primary outcomes remain mutually exclusive.
             if (MAIN_BET_KEYS.includes(key)) {
               clearOtherMainBets(key);
             }
 
-            state.bets[key] = clamp(state.bets[key] + amt, 0, MAX_BET);
+            state.bets[key] = clamp(state.bets[key] + amount, 0, MAX_BET);
             render();
           });
         });

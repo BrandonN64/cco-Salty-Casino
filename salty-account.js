@@ -30,6 +30,17 @@
 //    session.user.id / session.user.name are read out of the
 //    get-session response. The token itself is a live credential and
 //    has no reason to leave the browser it came from.
+//
+// FIX (Item A, account-page bleed): root / stats / statsUnsub /
+// ccProfile / ccLoading used to be module-level `let` variables shared
+// across every mount() call. Any mount whose cleanup didn't run through
+// the exact switchTab()/goHome() path, or any async profile-sync
+// callback resolving after a LATER mount had already reassigned `root`,
+// could end up rendering into whatever panel `root` currently pointed
+// to — which could belong to a different game. Fixed by giving every
+// mount() call its own isolated `instance` object; nothing is shared
+// across mounts anymore, so cross-mount/cross-game bleed is now
+// structurally impossible, not just unlikely.
 // ==/UserScript==
 (function () {
   "use strict";
@@ -78,17 +89,8 @@
   async function fetchCaseClickerProfile() {
     try {
       const [sessionRes, meRes, statsRes] = await Promise.all([
-        // get-session identifies the logged-in user via their own browser
-        // session cookie — same-origin, so the cookie attaches automatically
-        // when this fetch runs on a case-clicker.com page.
         fetch(`${CC_ORIGIN}/api/auth/get-session`, { credentials: "same-origin" }),
-        // api/me returns personalized account state (money, tokens, xp,
-        // rank, boughtPackages, etc.) — also same-origin, same cookie.
         fetch(`${CC_ORIGIN}/api/me`, { credentials: "same-origin" }),
-        // serverstats is a public, non-personalized global counters
-        // endpoint (total clicks/cases/etc. across all players) — no
-        // session needed, matches the "omit" credentials from the
-        // original captured request.
         fetch(`${CC_ORIGIN}/api/serverstats`, { credentials: "omit" }),
       ]);
       const session = sessionRes.ok ? await sessionRes.json() : null;
@@ -101,11 +103,6 @@
     }
   }
 
-  // Merges the fetched profile into players/{uid} in Firestore. Only
-  // ever writes user.id / user.name from the session response — never
-  // the session token, which is a live authentication credential with no
-  // reason to be persisted or logged anywhere outside the browser it
-  // came from.
   async function syncCaseClickerProfile() {
     const data = await fetchCaseClickerProfile();
     if (!data) return null;
@@ -180,12 +177,6 @@
   // ACCOUNT PAGE
   // ---------------------------------------------------------------------
   const AccountPage = (function () {
-    let root = null;
-    let statsUnsub = null;
-    let stats = null;
-    let ccProfile = null;
-    let ccLoading = true;
-
     function statCardHtml(label, value, cls) {
       return `<div class="acct-stat-card">
         <div class="acct-stat-label">${label}</div>
@@ -193,7 +184,7 @@
       </div>`;
     }
 
-    function gameTableHtml() {
+    function gameTableHtml(stats) {
       if (!stats || !stats.perGame || !Object.keys(stats.perGame).length) {
         return `<div class="muted center mt16">No rounds played yet — your per-game breakdown will show up here once you place a bet.</div>`;
       }
@@ -218,15 +209,19 @@
       </table>`;
     }
 
-    function render() {
-      if (!root) return;
+    // render() takes the instance explicitly and bails immediately if
+    // that instance has been disposed or its root detached — this is
+    // the guard that makes bleed impossible even if a caller ever
+    // forgets to honor the returned unmount function.
+    function render(instance) {
+      if (instance.disposed || !instance.root) return;
       ensureAccountStyle();
-      const s = stats || { totalWagered: 0, totalReturned: 0, netProfit: 0, roundsPlayed: 0, biggestWin: null, biggestBet: null, perGame: {} };
+      const s = instance.stats || { totalWagered: 0, totalReturned: 0, netProfit: 0, roundsPlayed: 0, biggestWin: null, biggestBet: null, perGame: {} };
       const netCls = s.netProfit > 0 ? "win" : s.netProfit < 0 ? "lose" : "";
 
-      root.innerHTML = `
+      instance.root.innerHTML = `
         <div class="panel">
-          ${ccProfileCardHtml(ccProfile, ccLoading)}
+          ${ccProfileCardHtml(instance.ccProfile, instance.ccLoading)}
           <div class="acct-header">
             <div>
               <div class="title" style="font-size:20px">Your Stats</div>
@@ -246,19 +241,22 @@
             <div class="row" style="justify-content:space-between;align-items:center">
               <div class="title" style="font-size:16px">Per-Game Breakdown</div>
             </div>
-            ${gameTableHtml()}
+            ${gameTableHtml(s)}
           </div>
         </div>
       `;
 
-      const refreshBtn = root.querySelector("#acct-cc-refresh");
+      const refreshBtn = instance.root.querySelector("#acct-cc-refresh");
       if (refreshBtn) refreshBtn.addEventListener("click", async () => {
-        ccLoading = true;
-        render();
-        ccProfile = await syncCaseClickerProfile();
-        ccLoading = false;
-        render();
-        if (ccProfile && ccProfile.ccName) toast("Case-Clicker profile synced.");
+        if (instance.disposed) return;
+        instance.ccLoading = true;
+        render(instance);
+        const profile = await syncCaseClickerProfile();
+        if (instance.disposed) return; // guard: mount torn down while the fetch was in flight
+        instance.ccProfile = profile;
+        instance.ccLoading = false;
+        render(instance);
+        if (profile && profile.ccName) toast("Case-Clicker profile synced.");
         else toast("Could not sync Case-Clicker profile.");
       });
     }
@@ -268,27 +266,37 @@
       icon: "👤",
       order: 0, // shows first on the home grid
       async mount(el) {
-        root = el;
-        stats = Balance.statsCurrent;
-        ccProfile = null;
-        ccLoading = true;
-        render();
+        // Every mount gets its own isolated instance — no module-level
+        // shared state. A stale instance from a previous mount can, at
+        // worst, keep rendering into its OWN detached root (invisible,
+        // harmless); it can never write into a different instance's DOM.
+        const instance = {
+          root: el, stats: Balance.statsCurrent, ccProfile: null,
+          ccLoading: true, statsUnsub: null, disposed: false,
+        };
 
-        statsUnsub = Balance.subscribeStats((s) => {
-          stats = s;
-          render();
+        render(instance);
+
+        instance.statsUnsub = Balance.subscribeStats((s) => {
+          if (instance.disposed) return;
+          instance.stats = s;
+          render(instance);
         });
 
         // Fire the Case-Clicker sync on mount, not blocking initial render.
+        // Guarded by instance.disposed so a slow response arriving after
+        // this instance was torn down never touches the DOM.
         syncCaseClickerProfile().then((profile) => {
-          ccProfile = profile;
-          ccLoading = false;
-          render();
+          if (instance.disposed) return;
+          instance.ccProfile = profile;
+          instance.ccLoading = false;
+          render(instance);
         });
 
         return () => {
-          if (statsUnsub) statsUnsub();
-          root = null;
+          instance.disposed = true;
+          if (instance.statsUnsub) { instance.statsUnsub(); instance.statsUnsub = null; }
+          instance.root = null;
         };
       },
     };

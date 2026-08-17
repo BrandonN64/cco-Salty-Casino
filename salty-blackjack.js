@@ -212,7 +212,7 @@
     if (!soundEnabled()) return;
     const ctx = getAudioCtx();
     if (!ctx) return;
-    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    if (ctx.state === "suspended") ctx.resume().catch(() => { });
     const now = ctx.currentTime;
     function noiseBuffer(durSec) {
       const buf = ctx.createBuffer(1, Math.max(1, Math.floor(ctx.sampleRate * durSec)), ctx.sampleRate);
@@ -662,7 +662,7 @@
         totalProfit += mainProfit + sbProfit;
       }
       const insuranceProfit = state.insuranceProfit || 0;
-totalProfit += insuranceProfit;
+      totalProfit += insuranceProfit;
       state.lastResults = { totalProfit, handProfitTotal, sideBetProfitTotal, insuranceProfit, jackpotProfitTotal };
       render();
     }
@@ -709,7 +709,7 @@ totalProfit += insuranceProfit;
           const jackpotWinTag = hand.sideBetResults && hand.sideBetResults.jackpot === "win" ? ` 💰 JACKPOT!` : "";
           const resultOverlay = hand.status === "bust" ? `<div class="ov-result-overlay">${v.total} – Bust${jackpotWinTag}</div>`
             : hand.result === "blackjack" ? `<div class="ov-result-overlay">Blackjack!${jackpotWinTag}</div>`
-            : jackpotWinTag ? `<div class="ov-result-overlay">${jackpotWinTag.trim()}</div>` : "";
+              : jackpotWinTag ? `<div class="ov-result-overlay">${jackpotWinTag.trim()}</div>` : "";
           const winBadge = hand.result ? `<div class="ov-win-badge ${hand.profit > 0 ? "win" : hand.profit < 0 ? "lose" : "push"}">
               ${hand.profit > 0 ? "Win" : hand.profit < 0 ? "Lose" : "Push"}
             </div>` : "";

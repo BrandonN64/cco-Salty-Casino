@@ -704,24 +704,29 @@
         if (startBtn) startBtn.addEventListener("click", startRound);
       } else if (state.phase === "settled" && !state.autoRunning) {
         const againBtn = root.querySelector("#mines-again");
-        if (againBtn) againBtn.addEventListener("click", () => {
-          const mines = state.mines, bet = state.bet, jp = state.jackpotOn;
-          state = freshState();
-          state.mines = mines;
-          state.bet = bet;
-          state.jackpotOn = jp;
-          render();
-        });
+        if (againBtn) {
+          againBtn.addEventListener("click", () => {
+            const mines = state.mines;
+            const bet = state.bet;
+            const jp = state.jackpotOn;
+
+            state = freshState();
+            state.mines = mines;
+            state.bet = bet;
+            state.jackpotOn = jp;
+            render();
+          });
+        }
+
         const rebetBtn = root.querySelector("#mines-rebet");
-        const rebetBtn = root.querySelector("#mines-rebet");
-        if (rebetBtn) rebetBtn.addEventListener("click", () => {
-          const mines = state.mines, bet = state.bet, jp = state.jackpotOn;
-          state = freshState();
-          state.mines = mines;
-          state.bet = bet;
-          state.jackpotOn = jp;
-          startRound();
-        });
+        if (rebetBtn) {
+          rebetBtn.addEventListener("click", () => rebet(1));
+        }
+
+        const doubleRebetBtn = root.querySelector("#mines-double-rebet");
+        if (doubleRebetBtn) {
+          doubleRebetBtn.addEventListener("click", () => rebet(2));
+        }
       }
     }
 

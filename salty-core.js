@@ -275,6 +275,7 @@
       onClear = null,
       minBet = MIN_BET,
       maxBet = MAX_BET,
+      enableBetSpotDrop = true,
     } = opts;
 
     const input = root.querySelector(`#${idPrefix}-bet-text`);
@@ -324,7 +325,7 @@
       });
     });
 
-    if (betSpot) {
+    if (betSpot && enableBetSpotDrop) {
       betSpot.addEventListener("dragover", (e) => {
         e.preventDefault();
         betSpot.classList.add("drag-over");

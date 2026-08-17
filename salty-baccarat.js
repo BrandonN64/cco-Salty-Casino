@@ -852,6 +852,7 @@
             },
             minBet: 0,
             maxBet: MAX_BET,
+            enableBetSpotDrop: false,
           }
         );
         const dealBtn = root.querySelector("#bac-deal");

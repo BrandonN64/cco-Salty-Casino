@@ -1,5 +1,4 @@
 {
-  "version": "1.7.0",
   "modules": [
     "salty-core.js",
     "salty-jackpot.js",

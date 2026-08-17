@@ -1069,10 +1069,10 @@
       #${OVERLAY_ID} .acct-game-table td.game-name{ font-family:Inter,sans-serif; font-weight:700; }
 
       #${LAUNCH_ID} .saltys-icon-btn{
-        width:100%; height:100%; min-height:180px; border:none; background:transparent; cursor:pointer;
+        width:100%; height:100%; border:none; background:transparent; cursor:pointer;
         display:flex; align-items:center; justify-content:center; padding:20px;
       }
-      #${LAUNCH_ID} .saltys-icon-btn img{ width:150px; height:150px; object-fit:contain; transition:transform .15s ease; }
+      #${LAUNCH_ID} .saltys-icon-btn img{ width:100%; height:100%; max-width:150px; max-height:150px; object-fit:contain; transition:transform .15s ease; }
       #${LAUNCH_ID} .saltys-icon-btn:hover img{ transform:scale(1.05); }
     `;
     document.head.appendChild(s);
@@ -1261,7 +1261,7 @@
   // ---------------------------------------------------------------------
   const SLOT_ICON = `<img src="https://raw.githubusercontent.com/BrandonN64/cco-Salty-Casino/39d4354e067ea8d066796a48d2aa582eb1376a86/Salty's%20Casino.png" alt="Salty's Casino">`;
 
-  function ensureIconLauncher() {
+    function ensureIconLauncher() {
     if (window.location.pathname !== "/games") return;
     if (document.getElementById(LAUNCH_ID)) return;
     ensureStyle();
@@ -1277,17 +1277,36 @@
     }
     if (!sample || !grid) return; // grid hasn't rendered yet — the loader's MutationObserver will retry
 
-    // Shallow clone: keep the grid column's own classes (correct sizing/
-    // placement inside case-clicker's own CSS grid), discard its children
-    // entirely — the icon is the whole clickable surface, nothing mimicked.
+    // Shallow-clone the outer grid column (correct grid sizing/placement),
+    // then shallow-clone the actual Card element inside it too — keeping
+    // its own classes means its OWN stylesheet keeps sizing/padding/
+    // border/background exactly like every other tile, instead of us
+    // having to guess and reimplement those values ourselves.
     const col = sample.cloneNode(false);
     col.id = LAUNCH_ID;
-    col.innerHTML = `<button class="saltys-icon-btn" title="Salty's Casino">${SLOT_ICON}</button>`;
-    col.querySelector("button").addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      location.hash = HASH;
-    });
+
+    const sampleCard = sample.querySelector(".mantine-Card-root");
+    if (sampleCard) {
+      const card = sampleCard.cloneNode(false);
+      card.style.cursor = "pointer";
+      card.innerHTML = `<button class="saltys-icon-btn" title="Salty's Casino">${SLOT_ICON}</button>`;
+      card.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        location.hash = HASH;
+      });
+      col.appendChild(card);
+    } else {
+      // Fallback if their card structure ever changes shape — still
+      // works, just without inheriting their exact card chrome.
+      col.innerHTML = `<button class="saltys-icon-btn" title="Salty's Casino">${SLOT_ICON}</button>`;
+      col.querySelector("button").addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        location.hash = HASH;
+      });
+    }
+
     grid.appendChild(col);
   }
 

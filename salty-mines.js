@@ -258,7 +258,7 @@
     function freshState() {
       return {
         phase: "betting", mines: DEFAULT_MINES, bet: Math.min(100, MAX_BET), selectedChip: 100, jackpotOn: false,
-        minePositions: null, revealed: [], picks: 0, lastResult: null,
+        minePositions: null, revealed: [], picks: 0, lastResult: null, lastOpeningBet: null,
         // Autoplay
         autoMode: false, autoStagedTiles: [], autoRunning: false,
         autoRoundsTotal: AUTO_DEFAULT_ROUNDS, autoRoundsPlayed: 0,
@@ -284,7 +284,18 @@
       busy = true; render();
       try {
         await Balance.applyDelta(-total, "solo_mines_bet");
-        if (window.SaltyJackpot) window.SaltyJackpot.contribute(total, "mines");
+
+        // Save only the original configuration of a successfully funded round.
+        // Do not derive rebet from picks, multiplier, or final result state.
+        state.lastOpeningBet = {
+          mines: state.mines,
+          bet,
+          jackpotOn: state.jackpotOn,
+        };
+
+        if (window.SaltyJackpot) {
+          window.SaltyJackpot.contribute(total, "mines");
+        }
       }
       catch (e) { toast("Bet failed."); busy = false; render(); return; }
 
@@ -296,6 +307,37 @@
       state.currentJackpotStake = jp;
       busy = false;
       render();
+    }
+
+    function restoreOpeningBet(snapshot, multiplier = 1) {
+      if (!snapshot) return false;
+
+      state.mines = snapshot.mines;
+      state.bet = clamp(
+        Math.round(snapshot.bet * multiplier),
+        MIN_BET,
+        MAX_BET
+      );
+
+      // Jackpot is a fixed qualifying stake, not a variable wager.
+      state.jackpotOn = snapshot.jackpotOn;
+      return true;
+    }
+
+    async function rebet(multiplier = 1) {
+      if (busy || !state.lastOpeningBet) return;
+
+      if (!restoreOpeningBet(state.lastOpeningBet, multiplier)) return;
+
+      const jackpotStake = state.jackpotOn ? JACKPOT_SIDE_BET : 0;
+      const total = state.bet + jackpotStake;
+
+      if (total > Balance.current) {
+        toast(`Not enough balance to ${multiplier === 2 ? "double and rebet" : "rebet"}.`);
+        return;
+      }
+
+      await startRound();
     }
 
     async function revealTile(idx) {
@@ -571,8 +613,15 @@
           <button class="btn primary" id="mines-cashout" ${busy || state.picks === 0 ? "disabled" : ""} title="${state.picks === 0 ? "Reveal at least one safe tile first" : ""}">Cash Out ${multiplierFor(state.mines, state.picks).toFixed(2)}x</button>
         </div>`;
       } else {
+        const prior = state.lastOpeningBet;
+        const rebetAmount = prior ? prior.bet : state.bet;
+        const hasJackpot = prior ? prior.jackpotOn : state.jackpotOn;
+
         controlsHtml = state.autoRunning ? "" : `<div class="row center mt16">
-          <button class="btn primary" id="mines-rebet">Rebet ${fmt(state.bet)}${state.jackpotOn ? " + jackpot" : ""}</button>
+          <button class="btn primary" id="mines-rebet">
+            Rebet ${fmt(rebetAmount)}${hasJackpot ? " + jackpot" : ""}
+          </button>
+          <button class="btn gold" id="mines-double-rebet">2× Bet & Rebet</button>
           <button class="btn" id="mines-again">Change Bet</button>
         </div>`;
       }
@@ -663,6 +712,7 @@
           state.jackpotOn = jp;
           render();
         });
+        const rebetBtn = root.querySelector("#mines-rebet");
         const rebetBtn = root.querySelector("#mines-rebet");
         if (rebetBtn) rebetBtn.addEventListener("click", () => {
           const mines = state.mines, bet = state.bet, jp = state.jackpotOn;

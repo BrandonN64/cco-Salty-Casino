@@ -793,7 +793,7 @@
           {
             selectedChip: state.selectedChip,
             showBetSpot: false,
-            showInput: false,
+            showInput: true,
           }
         )}
 

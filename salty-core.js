@@ -1223,38 +1223,85 @@
     });
   }
 
-  function goHome() {
+    function goHome() {
     activeTab = null;
-    if (activeUnmount) { try { activeUnmount(); } catch { } activeUnmount = null; }
+
+    if (activeUnmount) {
+      try { activeUnmount(); } catch {}
+      activeUnmount = null;
+    }
+
+    const panel = document.getElementById("saltys-tab-panel");
+    if (panel) delete panel.dataset.activeGame;
+
     renderHome();
   }
 
+
   function switchTab(key) {
     if (!GAME_MODULES[key]) return;
-    activeTab = key;
-    if (activeUnmount) { try { activeUnmount(); } catch { } activeUnmount = null; }
-    document.getElementById("saltys-casino-home").style.display = "inline-block";
+
     const panel = document.getElementById("saltys-tab-panel");
+    if (!panel) return;
+
+    // updateView() can run repeatedly during SPA navigation, DOM changes,
+    // or hash checks. If this game is already mounted, don't destroy and
+    // recreate it — doing so interrupts active rounds and autoplay.
+    if (panel.dataset.activeGame === key) return;
+
+    activeTab = key;
+
+    if (activeUnmount) {
+      try { activeUnmount(); } catch {}
+      activeUnmount = null;
+    }
+
+    document.getElementById("saltys-casino-home").style.display = "inline-block";
+
     panel.innerHTML = "";
+    panel.dataset.activeGame = key;
+
     const result = GAME_MODULES[key].mount(panel);
     if (typeof result === "function") activeUnmount = result;
   }
+
 
   function overlayShouldShow() {
     return location.hash === "#" + HASH && location.pathname === "/games";
   }
 
+
   async function updateView() {
     const ov = ensureOverlay();
     const show = overlayShouldShow();
+
     if (show) {
       await showDisclaimer();
       ov.style.display = "block";
-      if (activeTab && GAME_MODULES[activeTab]) switchTab(activeTab);
-      else goHome();
+
+      const panel = document.getElementById("saltys-tab-panel");
+      const alreadyMounted = panel && panel.dataset.activeGame === activeTab;
+
+      // Do not re-mount the active game every time updateView() runs.
+      // Re-mounting triggers activeUnmount(), which settles/resets active
+      // rounds and was sending users back to the Account/home page.
+      if (activeTab && GAME_MODULES[activeTab]) {
+        if (!alreadyMounted) switchTab(activeTab);
+      } else if (!panel || !panel.dataset.activeGame) {
+        goHome();
+      }
     } else {
       ov.style.display = "none";
-      if (activeUnmount) { try { activeUnmount(); } catch { } activeUnmount = null; }
+
+      // This is a genuine casino close, so let the active module run its
+      // normal cleanup handler once.
+      if (activeUnmount) {
+        try { activeUnmount(); } catch {}
+        activeUnmount = null;
+      }
+
+      const panel = document.getElementById("saltys-tab-panel");
+      if (panel) delete panel.dataset.activeGame;
     }
   }
 

@@ -33,8 +33,7 @@
 
   const {
     MIN_BET, MAX_BET, GAME_MODULES, OVERLAY_ID,
-    Balance, clamp, delay, fmt, chipColor, chipStyle, chipLabel,
-    CHIP_DENOMS, toast,
+    Balance, clamp, delay, fmt, chipColor, renderBetControls, wireBetControls, toast,
   } = window.SaltyCore;
 
   const GRID_SIZE = 25; // 5x5
@@ -258,7 +257,7 @@
 
     function freshState() {
       return {
-        phase: "betting", mines: DEFAULT_MINES, bet: Math.min(100, MAX_BET), jackpotOn: false,
+        phase: "betting", mines: DEFAULT_MINES, bet: Math.min(100, MAX_BET), selectedChip: 100, jackpotOn: false,
         minePositions: null, revealed: [], picks: 0, lastResult: null,
         // Autoplay
         autoMode: false, autoStagedTiles: [], autoRunning: false,
@@ -554,19 +553,19 @@
             ${autoPanelHtml}
           </div>
           <div class="ov-chip-rail">
-            <div class="chip-select">
-              ${CHIP_DENOMS.map((v) => `
-                <div class="chip-btn" data-chip="${v}" ${busy || state.autoRunning ? "" : 'draggable="true"'} style="${chipStyle(v)}">
-                  <span class="chip-face">${chipLabel(v)}</span>
-                </div>
-              `).join("")}
-            </div>
-            <div class="row center" style="gap:10px;flex-wrap:wrap">
-              <button class="btn small gold" id="mines-bet-max" ${busy || state.autoRunning ? "disabled" : ""}>Max</button>
-              <button class="btn small" id="mines-bet-clear-amt" ${busy || state.autoRunning ? "disabled" : ""}>Clear Bet</button>
-              ${!state.autoMode ? `<button class="btn primary" id="mines-start" ${busy || !state.bet ? "disabled" : ""}>Start</button>` : ""}
-            </div>
-          </div>`;
+            ${renderBetControls(
+          "mines",
+          state.bet,
+          busy || state.autoRunning,
+          { selectedChip: state.selectedChip }
+        )}
+
+          <div class="row center" style="gap:10px;flex-wrap:wrap;margin-top:10px">
+            ${!state.autoMode
+            ? `<button class="btn primary" id="mines-start" ${busy || !state.bet ? "disabled" : ""}>Start</button>`
+            : ""}
+          </div>
+        </div>`;
       } else if (state.phase === "playing") {
         controlsHtml = `<div class="row center mt16">
           <button class="btn primary" id="mines-cashout" ${busy || state.picks === 0 ? "disabled" : ""} title="${state.picks === 0 ? "Reveal at least one safe tile first" : ""}">Cash Out ${multiplierFor(state.mines, state.picks).toFixed(2)}x</button>
@@ -631,41 +630,27 @@
           state.jackpotOn = !state.jackpotOn;
           render();
         });
-        root.querySelectorAll("[data-chip]").forEach((chip) => {
-          chip.addEventListener("click", () => {
-            state.bet = clamp(state.bet + parseInt(chip.dataset.chip, 10), MIN_BET, MAX_BET);
+        wireBetControls(
+          root,
+          "mines",
+          () => state.bet,
+          (value) => {
+            state.bet = value;
             render();
-          });
-          chip.addEventListener("dragstart", (e) => {
-            e.dataTransfer.setData("text/plain", chip.dataset.chip);
-            e.dataTransfer.effectAllowed = "copy";
-            const ghost = chip.cloneNode(true);
-            ghost.style.position = "absolute"; ghost.style.top = "-1000px"; ghost.style.left = "-1000px"; ghost.style.pointerEvents = "none";
-            document.body.appendChild(ghost);
-            e.dataTransfer.setDragImage(ghost, ghost.offsetWidth / 2, ghost.offsetHeight / 2);
-            setTimeout(() => ghost.remove(), 0);
-          });
-        });
-        const chipSelect = root.querySelector(".chip-select");
-        if (chipSelect) {
-          chipSelect.scrollLeft = chipScrollPos;
-          chipSelect.addEventListener("wheel", (e) => {
-            if (chipSelect.scrollWidth <= chipSelect.clientWidth) return;
-            e.preventDefault();
-            chipSelect.scrollLeft += e.deltaY;
-          }, { passive: false });
-          chipSelect.addEventListener("scroll", () => { chipScrollPos = chipSelect.scrollLeft; });
-        }
-        const maxBtn = root.querySelector("#mines-bet-max");
-        if (maxBtn) maxBtn.addEventListener("click", () => {
-          state.bet = clamp(Math.floor(Balance.current), MIN_BET, MAX_BET);
-          render();
-        });
-        const clearBtn = root.querySelector("#mines-bet-clear-amt");
-        if (clearBtn) clearBtn.addEventListener("click", () => {
-          state.bet = 0;
-          render();
-        });
+          },
+          {
+            getSelectedChip: () => state.selectedChip,
+            setSelectedChip: (value) => {
+              state.selectedChip = value;
+            },
+            onClear: () => {
+              state.bet = 0;
+              render();
+            },
+            minBet: 0,
+            maxBet: MAX_BET,
+          }
+        );
         const startBtn = root.querySelector("#mines-start");
         if (startBtn) startBtn.addEventListener("click", startRound);
       } else if (state.phase === "settled" && !state.autoRunning) {

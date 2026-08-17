@@ -141,14 +141,14 @@
   // Builds an inline style for a realistic casino chip: a solid base color,
   // a dashed edge-spot ring (the little stripes real chips have), and a
   // radial highlight so it looks embossed/glossy instead of a flat circle.
- function chipStyle(v) {
-  const c = chipColor(v);
-  const stripe = chipStripeColor(v);
+  function chipStyle(v) {
+    const c = chipColor(v);
+    const stripe = chipStripeColor(v);
 
-  if (v >= 1_000_000_000) {
-    const teal = "#14b8a6";
-    const gold = "#d4af37";
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
+    if (v >= 1_000_000_000) {
+      const teal = "#14b8a6";
+      const gold = "#d4af37";
+      const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
       <defs>
         <radialGradient id='bg' cx='35%' cy='30%' r='75%'>
           <stop offset='0%' stop-color='#1b2f22'/>
@@ -168,34 +168,34 @@
         <path d='M22,80 l1.8,4.4 l4.4,1.8 l-4.4,1.8 l-1.8,4.4 l-1.8,-4.4 l-4.4,-1.8 l4.4,-1.8 z'/>
       </g>
     </svg>`;
-    // The .replace(/'/g, "%27") is the actual fix — without it, the raw
-    // single quotes surviving encodeURIComponent() break the outer
-    // url('...') wrapper the moment the CSS parser hits the SVG's own
-    // xmlns='...' attribute.
-    const encoded = encodeURIComponent(svg).replace(/'/g, "%27");
-    return `
+      // The .replace(/'/g, "%27") is the actual fix — without it, the raw
+      // single quotes surviving encodeURIComponent() break the outer
+      // url('...') wrapper the moment the CSS parser hits the SVG's own
+      // xmlns='...' attribute.
+      const encoded = encodeURIComponent(svg).replace(/'/g, "%27");
+      return `
       background: url('data:image/svg+xml,${encoded}') center/100% no-repeat;
       border-color:${gold};
     `;
-  }
+    }
 
-  if (stripe) {
-    return `
+    if (stripe) {
+      return `
       background:
         radial-gradient(circle at 32% 28%, rgba(255,255,255,.35), rgba(255,255,255,0) 42%),
         repeating-conic-gradient(from 0deg, ${stripe} 0deg 14deg, ${c} 14deg 26deg, ${stripe} 26deg 40deg),
         ${c};
       border-color:${stripe};
     `;
-  }
-  return `
+    }
+    return `
     background:
       radial-gradient(circle at 32% 28%, rgba(255,255,255,.55), rgba(255,255,255,0) 42%),
       repeating-conic-gradient(from 0deg, ${c} 0deg 18deg, #ffffff22 18deg 22deg, ${c} 22deg 40deg),
       ${c};
     border-color:#1a1400;
   `;
-}
+  }
   // Renders a bet-amount text input (accepting shorthand) + a row of chip
   // buttons. `idPrefix` namespaces the element ids so multiple instances
   // (solo vs live) don't collide.
@@ -210,8 +210,8 @@
           <div class="bet-spot" id="${idPrefix}-bet-spot" title="Click or drag chips here">
             <div class="bet-spot-ring"></div>
             ${currentBet > 0
-              ? `<div class="bet-spot-pile">${pileHtml}</div><span class="bet-spot-amt">${fmt(currentBet)}</span>`
-              : `<span class="bet-spot-amt empty">Place<br>Bet</span>`}
+        ? `<div class="bet-spot-pile">${pileHtml}</div><span class="bet-spot-amt">${fmt(currentBet)}</span>`
+        : `<span class="bet-spot-amt empty">Place<br>Bet</span>`}
           </div>
           <div class="col grow" style="gap:6px">
             <div class="row">
@@ -311,7 +311,7 @@
   // ---------------------------------------------------------------------
   const SUITS = ["s", "h", "d", "c"];
   const SUIT_GLYPH = { s: "♠", h: "♥", d: "♦", c: "♣" };
-  const RANKS = ["2","3","4","5","6","7","8","9","10","J","Q","K","A"];
+  const RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
 
   function freshDeck() {
     const deck = [];
@@ -414,11 +414,11 @@
   }
 
   // --- 5/7-card poker hand evaluator (used by Poker: Casino Hold'em) ---
-  const RANK_ORDER = { "2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"10":10,"J":11,"Q":12,"K":13,"A":14 };
+  const RANK_ORDER = { "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, "10": 10, "J": 11, "Q": 12, "K": 13, "A": 14 };
   // HAND_NAMES index = rank tier, higher is better
   const HAND_NAMES = [
-    "High Card","Pair","Two Pair","Three of a Kind","Straight",
-    "Flush","Full House","Four of a Kind","Straight Flush","Royal Flush"
+    "High Card", "Pair", "Two Pair", "Three of a Kind", "Straight",
+    "Flush", "Full House", "Four of a Kind", "Straight Flush", "Royal Flush"
   ];
 
   function evaluate5(cards) {
@@ -1070,9 +1070,12 @@
 
       #${LAUNCH_ID}{
         position:fixed; left:16px; bottom:16px; z-index:99998;
-        display:none; padding:10px 14px; border:none; border-radius:10px;
-        background:#7c3aed; color:#fff; font-weight:700; cursor:pointer;
+        width:44px; height:44px; padding:5px; border:none; border-radius:12px;
+        background:#7c3aed; cursor:pointer; display:flex; align-items:center; justify-content:center;
+        box-shadow:0 4px 14px rgba(0,0,0,.4); transition:transform .15s ease, box-shadow .15s ease;
       }
+      #${LAUNCH_ID}:hover{ transform:translateY(-2px); box-shadow:0 6px 18px rgba(0,0,0,.5); }
+      #${LAUNCH_ID} img{ width:100%; height:100%; object-fit:contain; border-radius:8px; }
     `;
     document.head.appendChild(s);
   }
@@ -1221,14 +1224,14 @@
 
   function goHome() {
     activeTab = null;
-    if (activeUnmount) { try { activeUnmount(); } catch {} activeUnmount = null; }
+    if (activeUnmount) { try { activeUnmount(); } catch { } activeUnmount = null; }
     renderHome();
   }
 
   function switchTab(key) {
     if (!GAME_MODULES[key]) return;
     activeTab = key;
-    if (activeUnmount) { try { activeUnmount(); } catch {} activeUnmount = null; }
+    if (activeUnmount) { try { activeUnmount(); } catch { } activeUnmount = null; }
     document.getElementById("saltys-casino-home").style.display = "inline-block";
     const panel = document.getElementById("saltys-tab-panel");
     panel.innerHTML = "";
@@ -1250,7 +1253,7 @@
       else goHome();
     } else {
       ov.style.display = "none";
-      if (activeUnmount) { try { activeUnmount(); } catch {} activeUnmount = null; }
+      if (activeUnmount) { try { activeUnmount(); } catch { } activeUnmount = null; }
     }
   }
 
@@ -1258,67 +1261,17 @@
   // 7. Original games-tab card injection (unchanged behavior), now opens
   //    the tabbed shell instead of a static placeholder list.
   // ---------------------------------------------------------------------
-  const SLOT_ICON = `<img src="https://raw.githubusercontent.com/BrandonN64/cco-Salty-Casino/39d4354e067ea8d066796a48d2aa582eb1376a86/Salty's%20Casino.png" alt="Salty's Casino" style="width:100%;height:100%;object-fit:contain">`;
+  const SLOT_ICON = `<img src="https://raw.githubusercontent.com/BrandonN64/cco-Salty-Casino/39d4354e067ea8d066796a48d2aa582eb1376a86/Salty's%20Casino.png" alt="Salty's Casino">`;
 
-  function injectGamesCard() {
-    if (window.location.pathname !== "/games") return false;
-    if (document.getElementById(CARD_ID)) return true;
-
-    const known = ["Casebattle", "Coinflip", "Jackpot", "Dice", "Blackjack", "Plinko"];
-    let sample = null;
-    let grid = null;
-
-    for (const h of document.querySelectorAll(".mantine-Grid-col .mantine-Title-root")) {
-      if (known.includes(h.textContent.trim())) {
-        sample = h.closest(".mantine-Grid-col");
-        grid = sample && sample.closest(".mantine-Grid-inner");
-        if (grid) break;
-      }
-    }
-
-    if (!sample || !grid) return false;
-
-    try {
-      const col = sample.cloneNode(true);
-      col.id = CARD_ID;
-
-      const title = col.querySelector(".mantine-Title-root");
-      if (title) title.textContent = "Salty's Casino";
-
-      const centers = col.querySelectorAll(".mantine-Center-root");
-      const iconCenter = centers[centers.length - 1];
-      if (iconCenter) {
-        iconCenter.innerHTML = `
-          <div style="width:150px;height:150px;margin:0 auto;display:flex;align-items:center;justify-content:center;">
-            ${SLOT_ICON}
-          </div>
-        `;
-      }
-
-      const card = col.querySelector(".mantine-Card-root");
-      if (card) card.style.cursor = "pointer";
-
-      col.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        location.hash = HASH;
-      });
-
-      grid.appendChild(col);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  function ensureFallbackLauncher() {
-    if (document.getElementById(CARD_ID) || document.getElementById(LAUNCH_ID)) return;
+  function ensureIconLauncher() {
+    if (document.getElementById(LAUNCH_ID)) return;
+    ensureStyle();
     const b = document.createElement("button");
     b.id = LAUNCH_ID;
-    b.textContent = "Salty's Casino";
-    b.onclick = () => { location.hash = HASH; };
+    b.title = "Salty's Casino";
+    b.innerHTML = SLOT_ICON;
+    b.addEventListener("click", () => { location.hash = HASH; });
     document.body.appendChild(b);
-    b.style.display = "block";
   }
 
   // ---------------------------------------------------------------------
@@ -1380,8 +1333,7 @@
     switchTab,
     overlayShouldShow,
     updateView,
-    injectGamesCard,
-    ensureFallbackLauncher,
+    ensureIconLauncher,
     goHome,
     renderHome,
     registeredGameKeys,

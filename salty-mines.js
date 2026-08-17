@@ -129,8 +129,7 @@
           <h3>Full clear</h3>
           <p>If you reveal every single safe tile without hitting a mine, the round ends automatically as a full clear at the maximum multiplier for your chosen mine count — there's nothing left to reveal, so there's nothing left to risk.</p>
 
-          <h3>Autoplay</h3>
-          <p>Toggle <b>Autoplay</b> during betting to stage tiles instead of playing manually — click the tiles you want auto-revealed each round. Autoplay then repeats: bet, reveal your staged tiles in order, cash out automatically if they all clear safely, and start the next round — until a mine is hit, your staged tiles all clear on a round (which cashes out and stops there, since there's nothing further staged to reveal that round), your round limit is reached, or a stop-on-profit/stop-on-loss threshold you set is crossed.</p>
+          <p>Toggle <b>Autoplay</b> during betting to stage tiles instead of playing manually — click the tiles you want auto-revealed each round. Autoplay then repeats: bet, reveal your staged tiles in order, cash out automatically if they all clear safely, and start the next round. It continues after wins and losses until your round limit is reached, you press <b>Stop Autoplay</b>, a stop-on-profit/stop-on-loss threshold is crossed, or there is not enough balance for the next wager.</p>
 
           <h3>Progressive jackpot</h3>
           <p>0.05% of every wager placed at any table feeds one shared jackpot pool, whether or not you bet on it. <b>Collecting it is separate</b> — place the flat <b>Jackpot</b> bet (${fmt(JACKPOT_SIDE_BET)}) to be eligible that round. With it down, a <b>full clear</b> (every safe tile revealed, on any mine count) pays out a share of the shared pool, on top of your normal full-clear multiplier payout. Without the Jackpot bet, a full clear still pays its normal amount — you just don't collect the extra. Like any other side bet, the Jackpot bet is lost if you don't full-clear the board that round.</p>
@@ -391,11 +390,13 @@
       state.autoCumulativeProfit = 0;
       render();
 
-      while (state.autoRunning && state.autoRoundsPlayed < state.autoRoundsTotal) {
+      while (
+        state.autoRunning &&
+        state.autoRoundsPlayed < state.autoRoundsTotal
+      ) {
         await startRound();
 
-        // A failed bet (for example, insufficient balance) leaves the
-        // game out of its active playing phase.
+        // Bet failure, such as insufficient balance.
         if (state.phase !== "playing") {
           state.autoRunning = false;
           break;
@@ -411,7 +412,7 @@
           }
         }
 
-        // If all staged picks were safe, cash out the current round.
+        // A successful staged sequence automatically locks in its result.
         if (state.phase === "playing" && state.picks > 0) {
           await cashOut();
         }
@@ -423,12 +424,8 @@
 
         render();
 
-        // Stop conditions after a fully resolved round.
-        if (state.lastResult && state.lastResult.outcome === "mine") {
-          state.autoRunning = false;
-          break;
-        }
-
+        // Only configured profit/loss limits, manual stop, max rounds,
+        // or an inability to start the next wager stop autoplay.
         if (
           state.autoStopOnProfit > 0 &&
           state.autoCumulativeProfit >= state.autoStopOnProfit
@@ -447,9 +444,8 @@
 
         if (!state.autoRunning) break;
 
-        // Prepare the same mounted Mines module for the next round.
-        // Do not call freshState(), because it would erase autoplay
-        // configuration and staged tiles.
+        // Preserve the bet, mine count, jackpot choice, and staged tiles.
+        // Only reset the board-specific state for the next round.
         state.phase = "betting";
         state.minePositions = null;
         state.revealed = [];
@@ -469,6 +465,7 @@
       state.autoRunning = false;
       render();
     }
+
     function render() {
       if (!root) return;
       ensureMinesSharedStyle();

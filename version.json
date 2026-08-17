@@ -1,0 +1,14 @@
+{
+  "version": "1.7.0",
+  "modules": [
+    "salty-core.js",
+    "salty-jackpot.js",
+    "salty-account.js",
+    "salty-blackjack.js",
+    "salty-baccarat.js",
+    "salty-spanish21.js",
+    "salty-threecardpoker.js",
+    "salty-mines.js",
+    "salty-keno.js"
+  ]
+}

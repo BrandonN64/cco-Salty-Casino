@@ -44,9 +44,6 @@
 (function () {
   "use strict";
 
-// 0. CONFIG — fill in your own Firebase project details here.
-  //    See FIREBASE_SETUP.md for how to create these.
-  // ---------------------------------------------------------------------
   const FIREBASE_CONFIG = {
     apiKey: "AIzaSyA4edJ9nVJAAShxeHaaJL8colvX5-d8UXM",
     authDomain: "cco-salty-casino.firebaseapp.com",

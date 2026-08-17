@@ -362,7 +362,7 @@
         phase: "betting", selectedSeats: [], betPerHand: Math.min(100, MAX_BET),
         sidePPPerHand: 0, side21PerHand: 0, jackpotBetPerHand: false, activeBetTarget: "main",
         hands: [], dealer: [], dealerHoleHidden: true,
-        activeHandIndex: 0, insuranceOffered: false, insuranceBet: 0, insuranceResolved: false, lastResults: null,
+        activeHandIndex: 0, insuranceOffered: false, insuranceBet: 0, insuranceResolved: false, lastResults: null, insuranceProfit: 0,
       };
     }
     function getBetFor(target) {
@@ -409,6 +409,7 @@
       state.activeHandIndex = 0;
       state.insuranceOffered = false;
       state.insuranceBet = 0;
+      state.insuranceProfit = 0;
       state.insuranceResolved = false;
       state.lastResults = null;
       render();
@@ -482,7 +483,12 @@
     async function resolveDealerPeek() {
       const dealerBJ = isBlackjack(state.dealer);
       if (state.insuranceBet > 0 && !state.insuranceResolved) {
-        if (dealerBJ) await Balance.applyDelta(state.insuranceBet * 3, "solo_bj_insurance_win");
+        if (dealerBJ) {
+          await Balance.applyDelta(state.insuranceBet * 3, "solo_bj_insurance_win");
+          state.insuranceProfit = state.insuranceBet * 2;
+        } else {
+          state.insuranceProfit = -state.insuranceBet;
+        }
         state.insuranceResolved = true;
       }
       for (const hand of state.hands) {
@@ -655,13 +661,8 @@
         sideBetProfitTotal += sbProfit;
         totalProfit += mainProfit + sbProfit;
       }
-      let insuranceProfit = 0;
-      if (state.insuranceBet > 0 && !state.insuranceResolved) {
-        if (dealerBJ) { await Balance.applyDelta(state.insuranceBet * 3, "solo_bj_insurance_win"); insuranceProfit = state.insuranceBet * 2; }
-        else insuranceProfit = -state.insuranceBet;
-        state.insuranceResolved = true;
-        totalProfit += insuranceProfit;
-      }
+      const insuranceProfit = state.insuranceProfit || 0;
+totalProfit += insuranceProfit;
       state.lastResults = { totalProfit, handProfitTotal, sideBetProfitTotal, insuranceProfit, jackpotProfitTotal };
       render();
     }

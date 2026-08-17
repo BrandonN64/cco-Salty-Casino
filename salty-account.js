@@ -265,7 +265,7 @@
       label: "Account",
       icon: "👤",
       order: 0, // shows first on the home grid
-      async mount(el) {
+      mount(el) {
         // Every mount gets its own isolated instance — no module-level
         // shared state. A stale instance from a previous mount can, at
         // worst, keep rendering into its OWN detached root (invisible,

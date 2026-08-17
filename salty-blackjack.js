@@ -833,12 +833,12 @@
           </div>`;
         }).join("");
         const target = state.activeBetTarget || "main";
-        const betRailHtml = `<div class="ov-bet-rail">
+        const betRailHtml = `
           ${betSpotHtml("pp", state.sidePPPerHand, target === "pp", "Pairs", true)}
           ${betSpotHtml("main", state.betPerHand, target === "main", "Bet", false)}
           ${betSpotHtml("213", state.side21PerHand, target === "213", "21+3", true)}
           ${jackpotSpotHtml(state.jackpotBetPerHand)}
-        </div>`;
+        `;
         const totalWager = (state.betPerHand + (state.sidePPPerHand || 0) + (state.side21PerHand || 0) + (state.jackpotBetPerHand ? JACKPOT_SIDE_BET : 0)) * state.selectedSeats.length;
         root.innerHTML = jackpotBanner + rulesButtonRowHtml() + `<div class="ov-wrap"><div class="ov-table">
             ${tableBannerHtml()}

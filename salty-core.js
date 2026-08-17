@@ -570,20 +570,16 @@
   // Anything that doesn't match either shape falls into "other" so a
   // future game with a slightly different naming convention still gets
   // counted somewhere instead of throwing.
-  function classifyLedgerReason(reason) {
-    if (!reason) return { game: "other", kind: "other" };
+  function classifyLedgerReason(reason, delta) {
+    const kind = delta < 0 ? "wager" : delta > 0 ? "win" : "other";
+    if (!reason) return { game: "other", kind };
     if (reason.startsWith("jackpot_")) {
       const parts = reason.split("_");
-      return { game: parts[parts.length - 1] || "other", kind: "win" };
+      return { game: parts[parts.length - 1] || "other", kind };
     }
     let m = reason.match(/^(?:solo|live)_([a-z0-9]+)_(.+)$/);
     if (!m) m = reason.match(/^([a-z0-9]+)_(.+)$/);
-    if (!m) return { game: "other", kind: "other" };
-    const game = m[1];
-    const rest = m[2];
-    if (/bet|deal/.test(rest)) return { game, kind: "wager" };
-    if (/settle|win|push|blackjack|clear|cashout|instant/.test(rest)) return { game, kind: "win" };
-    return { game, kind: "other" };
+    return { game: m ? m[1] : "other", kind };
   }
   function computeUpdatedStats(prev, delta, reason, atMs) {
     const stats = {
@@ -595,7 +591,7 @@
       biggestBet: prev.biggestBet || null,
       perGame: { ...(prev.perGame || {}) },
     };
-    const { game, kind } = classifyLedgerReason(reason);
+    const { game, kind } = classifyLedgerReason(reason, delta);
     const g = { ...(stats.perGame[game] || { totalWagered: 0, totalReturned: 0, netProfit: 0, roundsPlayed: 0, biggestWin: null, biggestBet: null }) };
 
     if (kind === "wager") {

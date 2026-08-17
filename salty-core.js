@@ -54,7 +54,7 @@
   };
 
   const STARTING_BALANCE = 10000;
-  const MAX_BET = 1_000_000_000_000; // 1 billion tokens, per spec
+  const MAX_BET = 1_000_000_000; // 1 billion tokens, per spec
   const MIN_BET = 10;
 
   const ROULETTE_BETTING_MS = 45_000;

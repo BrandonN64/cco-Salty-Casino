@@ -1068,14 +1068,12 @@
       #${OVERLAY_ID} .acct-game-table td{ padding:8px 10px; font:600 13px/1.3 "JetBrains Mono",monospace; border-bottom:1px solid var(--border); }
       #${OVERLAY_ID} .acct-game-table td.game-name{ font-family:Inter,sans-serif; font-weight:700; }
 
-      #${LAUNCH_ID}{
-        position:fixed; left:16px; bottom:16px; z-index:99998;
-        width:44px; height:44px; padding:5px; border:none; border-radius:12px;
-        background:#7c3aed; cursor:pointer; display:flex; align-items:center; justify-content:center;
-        box-shadow:0 4px 14px rgba(0,0,0,.4); transition:transform .15s ease, box-shadow .15s ease;
+      #${LAUNCH_ID} .saltys-icon-btn{
+        width:100%; height:100%; min-height:180px; border:none; background:transparent; cursor:pointer;
+        display:flex; align-items:center; justify-content:center; padding:20px;
       }
-      #${LAUNCH_ID}:hover{ transform:translateY(-2px); box-shadow:0 6px 18px rgba(0,0,0,.5); }
-      #${LAUNCH_ID} img{ width:100%; height:100%; object-fit:contain; border-radius:8px; }
+      #${LAUNCH_ID} .saltys-icon-btn img{ width:150px; height:150px; object-fit:contain; transition:transform .15s ease; }
+      #${LAUNCH_ID} .saltys-icon-btn:hover img{ transform:scale(1.05); }
     `;
     document.head.appendChild(s);
   }
@@ -1264,14 +1262,33 @@
   const SLOT_ICON = `<img src="https://raw.githubusercontent.com/BrandonN64/cco-Salty-Casino/39d4354e067ea8d066796a48d2aa582eb1376a86/Salty's%20Casino.png" alt="Salty's Casino">`;
 
   function ensureIconLauncher() {
+    if (window.location.pathname !== "/games") return;
     if (document.getElementById(LAUNCH_ID)) return;
     ensureStyle();
-    const b = document.createElement("button");
-    b.id = LAUNCH_ID;
-    b.title = "Salty's Casino";
-    b.innerHTML = SLOT_ICON;
-    b.addEventListener("click", () => { location.hash = HASH; });
-    document.body.appendChild(b);
+
+    const known = ["Casebattle", "Coinflip", "Jackpot", "Dice", "Blackjack", "Plinko"];
+    let sample = null, grid = null;
+    for (const h of document.querySelectorAll(".mantine-Grid-col .mantine-Title-root")) {
+      if (known.includes(h.textContent.trim())) {
+        sample = h.closest(".mantine-Grid-col");
+        grid = sample && sample.closest(".mantine-Grid-inner");
+        if (grid) break;
+      }
+    }
+    if (!sample || !grid) return; // grid hasn't rendered yet — the loader's MutationObserver will retry
+
+    // Shallow clone: keep the grid column's own classes (correct sizing/
+    // placement inside case-clicker's own CSS grid), discard its children
+    // entirely — the icon is the whole clickable surface, nothing mimicked.
+    const col = sample.cloneNode(false);
+    col.id = LAUNCH_ID;
+    col.innerHTML = `<button class="saltys-icon-btn" title="Salty's Casino">${SLOT_ICON}</button>`;
+    col.querySelector("button").addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      location.hash = HASH;
+    });
+    grid.appendChild(col);
   }
 
   // ---------------------------------------------------------------------

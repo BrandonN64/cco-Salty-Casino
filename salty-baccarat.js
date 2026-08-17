@@ -398,6 +398,7 @@
         playerNatural: false, bankerNatural: false, winner: null,
         revealedKeys: new Set(),
         lastResult: null,
+        lastOpeningBet: null,
       };
     }
 
@@ -419,8 +420,21 @@
       if (wager <= 0) { toast("Place a bet first."); return; }
       if (wager > Balance.current) { toast("Not enough balance for that bet."); return; }
       busy = true; render();
-      try { await Balance.applyDelta(-wager, "solo_bac_deal"); }
-      catch (e) { toast("Bet failed."); busy = false; render(); return; }
+      try {
+        await Balance.applyDelta(-wager, "solo_bac_deal");
+
+        // Snapshot the opening layout only after the debit succeeds.
+        // Never derive rebet from settled results or final card state.
+        state.lastOpeningBet = {
+          bets: { ...state.bets },
+          jackpotBet: state.jackpotBet,
+        };
+      } catch (e) {
+        toast("Bet failed.");
+        busy = false;
+        render();
+        return;
+      }
 
       if (window.SaltyJackpot) window.SaltyJackpot.contribute(wager, "baccarat");
 
@@ -494,6 +508,38 @@
       state.phase = "settled";
       busy = false;
       render();
+    }
+
+    function restoreOpeningBet(snapshot, multiplier = 1) {
+      if (!snapshot) return false;
+
+      Object.keys(state.bets).forEach((key) => {
+        state.bets[key] = clamp(
+          Math.round((snapshot.bets[key] || 0) * multiplier),
+          0,
+          MAX_BET
+        );
+      });
+
+      // Jackpot is a fixed qualifying stake, not a variable wager.
+      // Preserve whether it was enabled, but do not double its amount.
+      state.jackpotBet = snapshot.jackpotBet;
+      state.activeBetTarget = "player";
+      return true;
+    }
+
+    async function rebet(multiplier = 1) {
+      if (busy || !state.lastOpeningBet) return;
+
+      if (!restoreOpeningBet(state.lastOpeningBet, multiplier)) return;
+
+      const wager = totalWager();
+      if (wager > Balance.current) {
+        toast(`Not enough balance to ${multiplier === 2 ? "double and rebet" : "rebet"}.`);
+        return;
+      }
+
+      await startDeal();
     }
 
     async function settle() {
@@ -769,6 +815,7 @@
             const key = spot.dataset.target;
             const amt = parseInt(e.dataTransfer.getData("text/plain"), 10);
             if (!isNaN(amt)) {
+              state, activeBetTarget = key;
               state.selectedChip = amt;
               if (MAIN_BET_KEYS.includes(key)) clearOtherMainBets(key);
               state.bets[key] = clamp(state.bets[key] + amt, 0, MAX_BET);
@@ -814,7 +861,17 @@
 
       let controls = "";
       if (state.phase === "settled") {
-        controls = `<div class="row center"><button class="btn primary" id="bac-rebet">Rebet ${fmt(totalWager())}</button><button class="btn" id="bac-again">Change Bet</button></div>`;
+        const prior = state.lastOpeningBet;
+        const rebetAmount = prior
+          ? Object.values(prior.bets).reduce((sum, amount) => sum + amount, 0)
+          + (prior.jackpotBet ? JACKPOT_SIDE_BET : 0)
+          : totalWager();
+
+        controls = `<div class="row center">
+  <button class="btn primary" id="bac-rebet">Rebet ${fmt(rebetAmount)}</button>
+  <button class="btn gold" id="bac-double-rebet">2× Bet & Rebet</button>
+  <button class="btn" id="bac-again">Change Bet</button>
+</div>`;
       } else {
         controls = `<div class="center muted">${state.phase === "dealing" ? "Dealing…" : "Squeeze the card to reveal it…"}</div>`;
       }
@@ -836,13 +893,12 @@
           state.jackpotBet = jackpotBet;
           render();
         });
-        root.querySelector("#bac-rebet").addEventListener("click", () => {
-          const bets = state.bets, jackpotBet = state.jackpotBet;
-          state = freshState();
-          state.bets = bets;
-          state.jackpotBet = jackpotBet;
-          startDeal();
-        });
+        root.querySelector("#bac-rebet").addEventListener("click", () => rebet(1));
+
+        const doubleRebetBtn = root.querySelector("#bac-double-rebet");
+        if (doubleRebetBtn) {
+          doubleRebetBtn.addEventListener("click", () => rebet(2));
+        }
       }
     }
 

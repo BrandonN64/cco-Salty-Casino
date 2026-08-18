@@ -39,7 +39,7 @@
   const {
     MIN_BET, MAX_BET, GAME_MODULES, OVERLAY_ID,
     Balance, Shoe, RANK_ORDER, cardColor, SUIT_GLYPH, clamp, delay, fmt,
-    chipColor, chipStyle, chipLabel, CHIP_DENOMS, toast,
+    chipColor, chipStyle, renderBetControls, wireBetControls, toast,
   } = window.SaltyCore;
 
   const MAX_HANDS = 5;
@@ -368,9 +368,10 @@
     function freshState() {
       return {
         phase: "betting", selectedSeats: [], antePerHand: Math.min(100, MAX_BET),
-        pairPlusPerHand: 0, jackpotBetPerHand: false, activeBetTarget: "ante",
+        pairPlusPerHand: 0, jackpotBetPerHand: false, activeBetTarget: "ante", selectedChip: 100,
         hands: [], dealer: [], dealerHidden: true,
         activeHandIndex: 0, lastResults: null,
+        lastOpeningBet: null,
       };
     }
     function getBetFor(target) {
@@ -402,6 +403,12 @@
       busy = true; render();
       try {
         await Balance.applyDelta(-total, "solo_tcp_deal_multi");
+        state.lastOpeningBet = {
+          selectedSeats: [...state.selectedSeats],
+          antePerHand: ante,
+          pairPlusPerHand: pp,
+          jackpotBetPerHand: state.jackpotBetPerHand,
+        };
         if (window.SaltyJackpot) window.SaltyJackpot.contribute(total, "threecardpoker");
       }
       catch (e) { toast("Bet failed."); busy = false; render(); return; }
@@ -465,6 +472,47 @@
       advanceIfResolved();
       busy = false;
       render();
+    }
+
+    function restoreOpeningBet(snapshot, multiplier = 1) {
+      if (!snapshot) return false;
+
+      state.selectedSeats = [...snapshot.selectedSeats];
+      state.antePerHand = clamp(
+        Math.round(snapshot.antePerHand * multiplier),
+        MIN_BET,
+        MAX_BET
+      );
+      state.pairPlusPerHand = clamp(
+        Math.round(snapshot.pairPlusPerHand * multiplier),
+        0,
+        MAX_BET
+      );
+
+      // Jackpot is a fixed qualifying stake, not a variable wager.
+      state.jackpotBetPerHand = snapshot.jackpotBetPerHand;
+      state.activeBetTarget = "ante";
+      return true;
+    }
+
+    async function rebet(multiplier = 1) {
+      if (busy || !state.lastOpeningBet) return;
+
+      const restored = restoreOpeningBet(state.lastOpeningBet, multiplier);
+      if (!restored) return;
+
+      const seatCount = state.selectedSeats.length;
+      const jackpotPerHand = state.jackpotBetPerHand ? JACKPOT_SIDE_BET : 0;
+      const openingTotal =
+        (state.antePerHand + state.pairPlusPerHand + jackpotPerHand) *
+        seatCount;
+
+      if (openingTotal > Balance.current) {
+        toast(`Not enough balance to ${multiplier === 2 ? "double and rebet" : "rebet"}.`);
+        return;
+      }
+
+      await startDeal();
     }
 
     function currentHand() { return state.hands[state.activeHandIndex]; }
@@ -664,16 +712,13 @@
           </div>
           <div class="ov-bet-rail">${betRailHtml}</div>
           <div class="ov-chip-rail">
-            <div class="chip-select">
-              ${CHIP_DENOMS.map((v) => `
-                <div class="chip-btn" data-chip="${v}" ${busy ? "" : 'draggable="true"'} style="${chipStyle(v)}">
-                  <span class="chip-face">${chipLabel(v)}</span>
-                </div>
-              `).join("")}
-            </div>
+            ${renderBetControls(
+              "tcp",
+              getBetFor(state.activeBetTarget || "ante"),
+              busy,
+              { selectedChip: state.selectedChip }
+            )}
             <div class="row center" style="gap:10px;flex-wrap:wrap">
-              <button class="btn small gold" id="tcp-bet-max" ${busy ? "disabled" : ""}>Max</button>
-              <button class="btn small" id="tcp-bet-clear" ${busy ? "disabled" : ""}>Clear</button>
               <span class="muted">${state.selectedSeats.length} seat${state.selectedSeats.length === 1 ? "" : "s"} · Total wager: ${fmt(totalWager)}</span>
               <button class="btn primary" id="tcp-deal" ${busy || !state.selectedSeats.length || !state.antePerHand ? "disabled" : ""}>Deal</button>
             </div>
@@ -710,42 +755,29 @@
             if (!isNaN(amt)) { setBetFor(spot.dataset.target, clamp(getBetFor(spot.dataset.target) + amt, 0, MAX_BET)); render(); }
           });
         });
-        root.querySelectorAll("[data-chip]").forEach((chip) => {
-          const addChip = () => { const t = state.activeBetTarget || "ante"; setBetFor(t, clamp(getBetFor(t) + parseInt(chip.dataset.chip, 10), 0, MAX_BET)); render(); };
-          chip.addEventListener("click", addChip);
-          chip.addEventListener("dragstart", (e) => {
-            e.dataTransfer.setData("text/plain", chip.dataset.chip);
-            e.dataTransfer.effectAllowed = "copy";
-            const ghost = chip.cloneNode(true);
-            ghost.style.position = "absolute"; ghost.style.top = "-1000px"; ghost.style.left = "-1000px"; ghost.style.pointerEvents = "none";
-            document.body.appendChild(ghost);
-            e.dataTransfer.setDragImage(ghost, ghost.offsetWidth / 2, ghost.offsetHeight / 2);
-            setTimeout(() => ghost.remove(), 0);
-          });
-        });
-        const chipSelect = root.querySelector(".chip-select");
-        if (chipSelect) {
-          chipSelect.scrollLeft = chipScrollPos;
-          chipSelect.addEventListener("wheel", (e) => {
-            if (chipSelect.scrollWidth <= chipSelect.clientWidth) return;
-            e.preventDefault();
-            chipSelect.scrollLeft += e.deltaY;
-          }, { passive: false });
-          chipSelect.addEventListener("scroll", () => { chipScrollPos = chipSelect.scrollLeft; });
-        }
-        const maxBtn = root.querySelector("#tcp-bet-max");
-        if (maxBtn) maxBtn.addEventListener("click", () => {
-          const t = state.activeBetTarget || "ante";
-          setBetFor(t, clamp(Math.floor(Balance.current), 0, MAX_BET));
-          render();
-        });
-        const clearBtn = root.querySelector("#tcp-bet-clear");
-        if (clearBtn) clearBtn.addEventListener("click", () => {
-          state.antePerHand = 0;
-          state.pairPlusPerHand = 0;
-          state.jackpotBetPerHand = false;
-          render();
-        });
+        wireBetControls(
+          root,
+          "tcp",
+          () => getBetFor(state.activeBetTarget || "ante"),
+          (value) => {
+            setBetFor(state.activeBetTarget || "ante", value);
+            render();
+          },
+          {
+            getSelectedChip: () => state.selectedChip,
+            setSelectedChip: (value) => {
+              state.selectedChip = value;
+            },
+            onClear: () => {
+              state.antePerHand = 0;
+              state.pairPlusPerHand = 0;
+              state.jackpotBetPerHand = false;
+              render();
+            },
+            minBet: 0,
+            maxBet: MAX_BET,
+          }
+        );
         root.querySelector("#tcp-deal").addEventListener("click", startDeal);
         return;
       }
@@ -757,8 +789,12 @@
           <button class="btn" id="tcp-fold" ${busy ? "disabled" : ""}>Fold</button>
         </div>`;
       } else if (state.phase === "settled") {
+        const prior = state.lastOpeningBet;
+        const rebetAmount = prior ? prior.antePerHand : state.antePerHand;
+        const hasSides = prior ? (prior.pairPlusPerHand || prior.jackpotBetPerHand) : (state.pairPlusPerHand || state.jackpotBetPerHand);
         controls = `<div class="row center">
-          <button class="btn primary" id="tcp-rebet">Rebet ${fmt(state.antePerHand)}${state.pairPlusPerHand || state.jackpotBetPerHand ? " + sides" : ""}</button>
+          <button class="btn primary" id="tcp-rebet">Rebet ${fmt(rebetAmount)}${hasSides ? " + sides" : ""}</button>
+          <button class="btn gold" id="tcp-double-rebet">2× Bet & Rebet</button>
           <button class="btn" id="tcp-again">Change Bet</button>
         </div>`;
       } else {
@@ -780,15 +816,10 @@
           state.jackpotBetPerHand = jp;
           render();
         });
-        root.querySelector("#tcp-rebet").addEventListener("click", () => {
-          const seats = state.selectedSeats, a = state.antePerHand, pp = state.pairPlusPerHand, jp = state.jackpotBetPerHand;
-          state = freshState();
-          state.selectedSeats = seats;
-          state.antePerHand = a;
-          state.pairPlusPerHand = pp;
-          state.jackpotBetPerHand = jp;
-          startDeal();
-        });
+        root.querySelector("#tcp-rebet").addEventListener("click", () => rebet(1));
+
+        const doubleRebetBtn = root.querySelector("#tcp-double-rebet");
+        if (doubleRebetBtn) doubleRebetBtn.addEventListener("click", () => rebet(2));
       }
     }
 

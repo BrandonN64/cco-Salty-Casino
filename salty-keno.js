@@ -26,8 +26,8 @@
 
   const {
     MIN_BET, MAX_BET, GAME_MODULES, OVERLAY_ID,
-    Balance, clamp, delay, fmt, chipColor, chipStyle, chipLabel,
-    CHIP_DENOMS, toast,
+    Balance, clamp, delay, fmt, chipColor,
+    renderBetControls, wireBetControls, toast,
   } = window.SaltyCore;
 
   const TOTAL_NUMBERS = 80;
@@ -318,8 +318,8 @@
 
     function freshState() {
       return {
-        phase: "betting", picked: [], bet: Math.min(100, MAX_BET), jackpotOn: false,
-        drawn: [], revealed: [], lastResult: null,
+        phase: "betting", picked: [], bet: Math.min(100, MAX_BET), selectedChip: 100, jackpotOn: false,
+        drawn: [], revealed: [], lastResult: null, lastOpeningBet: null,
         // Autoplay
         autoRunning: false, autoRoundsTotal: AUTO_DEFAULT_ROUNDS, autoRoundsPlayed: 0,
         autoStopOnProfit: 0, autoStopOnLoss: 0, autoCumulativeProfit: 0,
@@ -358,6 +358,15 @@
       busy = true; render();
       try {
         await Balance.applyDelta(-total, "solo_keno_bet");
+
+        // Save only the original configuration of a successfully funded
+        // round. Never derive rebet from drawn numbers or final result state.
+        state.lastOpeningBet = {
+          picked: [...state.picked],
+          bet,
+          jackpotOn: state.jackpotOn,
+        };
+
         if (window.SaltyJackpot) window.SaltyJackpot.contribute(total, "keno");
       }
       catch (e) { toast("Bet failed."); busy = false; render(); return; }
@@ -377,6 +386,37 @@
 
       await settle(bet, jp);
       busy = false;
+    }
+
+    function restoreOpeningBet(snapshot, multiplier = 1) {
+      if (!snapshot) return false;
+
+      state.picked = [...snapshot.picked];
+      state.bet = clamp(
+        Math.round(snapshot.bet * multiplier),
+        MIN_BET,
+        MAX_BET
+      );
+
+      // Jackpot is a fixed qualifying stake, not a variable wager.
+      state.jackpotOn = snapshot.jackpotOn;
+      return true;
+    }
+
+    async function rebet(multiplier = 1) {
+      if (busy || !state.lastOpeningBet) return;
+
+      if (!restoreOpeningBet(state.lastOpeningBet, multiplier)) return;
+
+      const jackpotStake = state.jackpotOn ? JACKPOT_SIDE_BET : 0;
+      const total = state.bet + jackpotStake;
+
+      if (total > Balance.current) {
+        toast(`Not enough balance to ${multiplier === 2 ? "double and rebet" : "rebet"}.`);
+        return;
+      }
+
+      await startDraw();
     }
 
     async function settle(bet, jackpotStake) {
@@ -550,16 +590,13 @@
             </div>
           </div>
           <div class="ov-chip-rail">
-            <div class="chip-select">
-              ${CHIP_DENOMS.map((v) => `
-                <div class="chip-btn" data-chip="${v}" ${busy || state.autoRunning ? "" : 'draggable="true"'} style="${chipStyle(v)}">
-                  <span class="chip-face">${chipLabel(v)}</span>
-                </div>
-              `).join("")}
-            </div>
+            ${renderBetControls(
+              "keno",
+              state.bet,
+              busy || state.autoRunning,
+              { selectedChip: state.selectedChip }
+            )}
             <div class="row center" style="gap:10px;flex-wrap:wrap">
-              <button class="btn small gold" id="keno-bet-max" ${busy || state.autoRunning ? "disabled" : ""}>Max</button>
-              <button class="btn small" id="keno-bet-clear-amt" ${busy || state.autoRunning ? "disabled" : ""}>Clear Bet</button>
               ${!state.autoRunning ? `<button class="btn primary" id="keno-draw" ${busy || !spots || !state.bet ? "disabled" : ""}>Draw</button>` : ""}
             </div>
           </div>
@@ -567,8 +604,13 @@
       } else if (state.phase === "drawing") {
         controlsHtml = `<div class="center muted mt16">Drawing… (${state.revealed.length}/${NUMBERS_DRAWN})</div>`;
       } else {
+        const prior = state.lastOpeningBet;
+        const rebetAmount = prior ? prior.bet : state.bet;
+        const hasJackpot = prior ? prior.jackpotOn : state.jackpotOn;
+
         controlsHtml = state.autoRunning ? "" : `<div class="row center mt16">
-          <button class="btn primary" id="keno-rebet">Rebet ${fmt(state.bet)}${state.jackpotOn ? " + jackpot" : ""}</button>
+          <button class="btn primary" id="keno-rebet">Rebet ${fmt(rebetAmount)}${hasJackpot ? " + jackpot" : ""}</button>
+          <button class="btn gold" id="keno-double-rebet">2× Bet & Rebet</button>
           <button class="btn" id="keno-again">Change Numbers</button>
         </div>`;
       }
@@ -594,41 +636,27 @@
           state.jackpotOn = !state.jackpotOn;
           render();
         });
-        root.querySelectorAll("[data-chip]").forEach((chip) => {
-          chip.addEventListener("click", () => {
-            state.bet = clamp(state.bet + parseInt(chip.dataset.chip, 10), MIN_BET, MAX_BET);
+        wireBetControls(
+          root,
+          "keno",
+          () => state.bet,
+          (value) => {
+            state.bet = value;
             render();
-          });
-          chip.addEventListener("dragstart", (e) => {
-            e.dataTransfer.setData("text/plain", chip.dataset.chip);
-            e.dataTransfer.effectAllowed = "copy";
-            const ghost = chip.cloneNode(true);
-            ghost.style.position = "absolute"; ghost.style.top = "-1000px"; ghost.style.left = "-1000px"; ghost.style.pointerEvents = "none";
-            document.body.appendChild(ghost);
-            e.dataTransfer.setDragImage(ghost, ghost.offsetWidth / 2, ghost.offsetHeight / 2);
-            setTimeout(() => ghost.remove(), 0);
-          });
-        });
-        const chipSelect = root.querySelector(".chip-select");
-        if (chipSelect) {
-          chipSelect.scrollLeft = chipScrollPos;
-          chipSelect.addEventListener("wheel", (e) => {
-            if (chipSelect.scrollWidth <= chipSelect.clientWidth) return;
-            e.preventDefault();
-            chipSelect.scrollLeft += e.deltaY;
-          }, { passive: false });
-          chipSelect.addEventListener("scroll", () => { chipScrollPos = chipSelect.scrollLeft; });
-        }
-        const maxBtn = root.querySelector("#keno-bet-max");
-        if (maxBtn) maxBtn.addEventListener("click", () => {
-          state.bet = clamp(Math.floor(Balance.current), MIN_BET, MAX_BET);
-          render();
-        });
-        const clearBetBtn = root.querySelector("#keno-bet-clear-amt");
-        if (clearBetBtn) clearBetBtn.addEventListener("click", () => {
-          state.bet = 0;
-          render();
-        });
+          },
+          {
+            getSelectedChip: () => state.selectedChip,
+            setSelectedChip: (value) => {
+              state.selectedChip = value;
+            },
+            onClear: () => {
+              state.bet = 0;
+              render();
+            },
+            minBet: 0,
+            maxBet: MAX_BET,
+          }
+        );
         const drawBtn = root.querySelector("#keno-draw");
         if (drawBtn) drawBtn.addEventListener("click", startDraw);
 
@@ -661,14 +689,10 @@
           render();
         });
         const rebetBtn = root.querySelector("#keno-rebet");
-        if (rebetBtn) rebetBtn.addEventListener("click", () => {
-          const picked = state.picked, bet = state.bet, jp = state.jackpotOn;
-          state = freshState();
-          state.picked = picked;
-          state.bet = bet;
-          state.jackpotOn = jp;
-          startDraw();
-        });
+        if (rebetBtn) rebetBtn.addEventListener("click", () => rebet(1));
+
+        const doubleRebetBtn = root.querySelector("#keno-double-rebet");
+        if (doubleRebetBtn) doubleRebetBtn.addEventListener("click", () => rebet(2));
       }
     }
 

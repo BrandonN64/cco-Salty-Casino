@@ -39,8 +39,8 @@
   const {
     MIN_BET, MAX_BET, GAME_MODULES, OVERLAY_ID,
     Balance, Shoe, freshSpanishDeck, bjHandValue, isBlackjack, isSplittablePair,
-    cardColor, SUIT_GLYPH, clamp, delay, fmt, chipColor, chipStyle, chipLabel,
-    CHIP_DENOMS, toast,
+    cardColor, SUIT_GLYPH, clamp, delay, fmt, chipColor, chipStyle,
+    renderBetControls, wireBetControls, toast,
   } = window.SaltyCore;
 
   const DEALER_STANDS_SOFT_17 = false; // Spanish 21 dealer HITS soft 17 (standard)
@@ -387,9 +387,10 @@
     function freshState() {
       return {
         phase: "betting", selectedSeats: [], betPerHand: Math.min(100, MAX_BET),
-        sideMatchPerHand: 0, jackpotBetPerHand: false, activeBetTarget: "main",
+        sideMatchPerHand: 0, jackpotBetPerHand: false, activeBetTarget: "main", selectedChip: 100,
         hands: [], dealer: [], dealerHoleHidden: true,
         activeHandIndex: 0, lastResults: null,
+        lastOpeningBet: null,
       };
     }
     function getBetFor(target) {
@@ -421,6 +422,12 @@
       busy = true; render();
       try {
         await Balance.applyDelta(-total, "solo_sp21_deal_multi");
+        state.lastOpeningBet = {
+          selectedSeats: [...state.selectedSeats],
+          betPerHand: bet,
+          sideMatchPerHand: match,
+          jackpotBetPerHand: state.jackpotBetPerHand,
+        };
         if (window.SaltyJackpot) window.SaltyJackpot.contribute(total, "spanish21");
       }
       catch (e) { toast("Bet failed."); busy = false; render(); return; }
@@ -458,6 +465,46 @@
       await resolveDealerPeek();
       busy = false;
       render();
+    }
+    function restoreOpeningBet(snapshot, multiplier = 1) {
+      if (!snapshot) return false;
+
+      state.selectedSeats = [...snapshot.selectedSeats];
+      state.betPerHand = clamp(
+        Math.round(snapshot.betPerHand * multiplier),
+        MIN_BET,
+        MAX_BET
+      );
+      state.sideMatchPerHand = clamp(
+        Math.round(snapshot.sideMatchPerHand * multiplier),
+        0,
+        MAX_BET
+      );
+
+      // Jackpot is a fixed qualifying stake, not a variable wager.
+      state.jackpotBetPerHand = snapshot.jackpotBetPerHand;
+      state.activeBetTarget = "main";
+      return true;
+    }
+
+    async function rebet(multiplier = 1) {
+      if (busy || !state.lastOpeningBet) return;
+
+      const restored = restoreOpeningBet(state.lastOpeningBet, multiplier);
+      if (!restored) return;
+
+      const seatCount = state.selectedSeats.length;
+      const jackpotPerHand = state.jackpotBetPerHand ? JACKPOT_SIDE_BET : 0;
+      const openingTotal =
+        (state.betPerHand + state.sideMatchPerHand + jackpotPerHand) *
+        seatCount;
+
+      if (openingTotal > Balance.current) {
+        toast(`Not enough balance to ${multiplier === 2 ? "double and rebet" : "rebet"}.`);
+        return;
+      }
+
+      await startDeal();
     }
 
     // The dealer peek: checks the hole card, resolves any natural
@@ -786,16 +833,13 @@
           </div>
           <div class="ov-bet-rail">${betRailHtml}</div>
           <div class="ov-chip-rail">
-            <div class="chip-select">
-              ${CHIP_DENOMS.map((v) => `
-                <div class="chip-btn" data-chip="${v}" ${busy ? "" : 'draggable="true"'} style="${chipStyle(v)}">
-                  <span class="chip-face">${chipLabel(v)}</span>
-                </div>
-              `).join("")}
-            </div>
+            ${renderBetControls(
+              "sp21",
+              getBetFor(state.activeBetTarget || "main"),
+              busy,
+              { selectedChip: state.selectedChip }
+            )}
             <div class="row center" style="gap:10px;flex-wrap:wrap">
-              <button class="btn small gold" id="sp21-bet-max" ${busy ? "disabled" : ""}>Max</button>
-              <button class="btn small" id="sp21-bet-clear" ${busy ? "disabled" : ""}>Clear</button>
               <span class="muted">${state.selectedSeats.length} seat${state.selectedSeats.length === 1 ? "" : "s"} · Total wager: ${fmt(totalWager)}</span>
               <button class="btn primary" id="sp21-deal" ${busy || !state.selectedSeats.length || !state.betPerHand ? "disabled" : ""}>Deal</button>
             </div>
@@ -832,42 +876,29 @@
             if (!isNaN(amt)) { setBetFor(spot.dataset.target, clamp(getBetFor(spot.dataset.target) + amt, 0, MAX_BET)); render(); }
           });
         });
-        root.querySelectorAll("[data-chip]").forEach((chip) => {
-          const addChip = () => { const t = state.activeBetTarget || "main"; setBetFor(t, clamp(getBetFor(t) + parseInt(chip.dataset.chip, 10), 0, MAX_BET)); render(); };
-          chip.addEventListener("click", addChip);
-          chip.addEventListener("dragstart", (e) => {
-            e.dataTransfer.setData("text/plain", chip.dataset.chip);
-            e.dataTransfer.effectAllowed = "copy";
-            const ghost = chip.cloneNode(true);
-            ghost.style.position = "absolute"; ghost.style.top = "-1000px"; ghost.style.left = "-1000px"; ghost.style.pointerEvents = "none";
-            document.body.appendChild(ghost);
-            e.dataTransfer.setDragImage(ghost, ghost.offsetWidth / 2, ghost.offsetHeight / 2);
-            setTimeout(() => ghost.remove(), 0);
-          });
-        });
-        const chipSelect = root.querySelector(".chip-select");
-        if (chipSelect) {
-          chipSelect.scrollLeft = chipScrollPos;
-          chipSelect.addEventListener("wheel", (e) => {
-            if (chipSelect.scrollWidth <= chipSelect.clientWidth) return;
-            e.preventDefault();
-            chipSelect.scrollLeft += e.deltaY;
-          }, { passive: false });
-          chipSelect.addEventListener("scroll", () => { chipScrollPos = chipSelect.scrollLeft; });
-        }
-        const maxBtn = root.querySelector("#sp21-bet-max");
-        if (maxBtn) maxBtn.addEventListener("click", () => {
-          const t = state.activeBetTarget || "main";
-          setBetFor(t, clamp(Math.floor(Balance.current), 0, MAX_BET));
-          render();
-        });
-        const clearBtn = root.querySelector("#sp21-bet-clear");
-        if (clearBtn) clearBtn.addEventListener("click", () => {
-          state.betPerHand = 0;
-          state.sideMatchPerHand = 0;
-          state.jackpotBetPerHand = false;
-          render();
-        });
+        wireBetControls(
+          root,
+          "sp21",
+          () => getBetFor(state.activeBetTarget || "main"),
+          (value) => {
+            setBetFor(state.activeBetTarget || "main", value);
+            render();
+          },
+          {
+            getSelectedChip: () => state.selectedChip,
+            setSelectedChip: (value) => {
+              state.selectedChip = value;
+            },
+            onClear: () => {
+              state.betPerHand = 0;
+              state.sideMatchPerHand = 0;
+              state.jackpotBetPerHand = false;
+              render();
+            },
+            minBet: 0,
+            maxBet: MAX_BET,
+          }
+        );
         root.querySelector("#sp21-deal").addEventListener("click", startDeal);
         return;
       }
@@ -887,8 +918,12 @@
           <button class="btn" id="sp21-surrender" ${busy || !canSurrender ? "disabled" : ""} title="Forfeit the hand, get half your bet back">Surrender</button>
         </div>`;
       } else if (state.phase === "settled") {
+        const prior = state.lastOpeningBet;
+        const rebetAmount = prior ? prior.betPerHand : state.betPerHand;
+        const hasSides = prior ? (prior.sideMatchPerHand || prior.jackpotBetPerHand) : (state.sideMatchPerHand || state.jackpotBetPerHand);
         controls = `<div class="row center">
-          <button class="btn primary" id="sp21-rebet">Rebet ${fmt(state.betPerHand)}${state.sideMatchPerHand || state.jackpotBetPerHand ? " + sides" : ""}</button>
+          <button class="btn primary" id="sp21-rebet">Rebet ${fmt(rebetAmount)}${hasSides ? " + sides" : ""}</button>
+          <button class="btn gold" id="sp21-double-rebet">2× Bet & Rebet</button>
           <button class="btn" id="sp21-again">Change Bet</button>
         </div>`;
       } else {
@@ -913,15 +948,10 @@
           state.jackpotBetPerHand = jp;
           render();
         });
-        root.querySelector("#sp21-rebet").addEventListener("click", () => {
-          const seats = state.selectedSeats, b = state.betPerHand, m = state.sideMatchPerHand, jp = state.jackpotBetPerHand;
-          state = freshState();
-          state.selectedSeats = seats;
-          state.betPerHand = b;
-          state.sideMatchPerHand = m;
-          state.jackpotBetPerHand = jp;
-          startDeal();
-        });
+        root.querySelector("#sp21-rebet").addEventListener("click", () => rebet(1));
+
+        const doubleRebetBtn = root.querySelector("#sp21-double-rebet");
+        if (doubleRebetBtn) doubleRebetBtn.addEventListener("click", () => rebet(2));
       }
     }
 

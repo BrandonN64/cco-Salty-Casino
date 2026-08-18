@@ -32,6 +32,11 @@
 //     this is what pays for the free doubles/splits above. A dealer 22
 //     is the ONLY dealer total that doesn't just lose outright to any
 //     surviving player hand.
+//   - POT OF GOLD (side bet): pays based on how many Free Bet tokens
+//     you collect at a seat during the round — one token every time a
+//     free double or free split happens on any hand at that seat,
+//     regardless of whether the hand(s) ultimately win or lose. Loses
+//     outright to a dealer blackjack. See POT_OF_GOLD_PAYOUTS below.
 // ==/UserScript==
 (function () {
   "use strict";
@@ -46,6 +51,16 @@
   const DEALER_STANDS_SOFT_17 = false; // dealer HITS soft 17 (standard Free Bet Blackjack rule)
   const SOLO_MAX_HANDS_PER_SEAT = 4; // original + up to 3 splits (aces included)
   const MAX_HANDS = 5; // up to 5 seats at once, same as Blackjack/Spanish 21
+
+  // Pot of Gold side bet paytable — keyed by number of Free Bet tokens
+  // collected at that seat during the round (5+ tokens all pay the same,
+  // topped-out rate). Matches one of the two published commercial pay
+  // tables for this side bet.
+  const POT_OF_GOLD_PAYOUTS = { 1: 3, 2: 12, 3: 30, 4: 50, 5: 100 };
+  function potOfGoldPayoutMultiplier(tokens) {
+    if (tokens <= 0) return 0;
+    return POT_OF_GOLD_PAYOUTS[Math.min(tokens, 5)];
+  }
 
   // Local card-value helper (Ace=11, face=10, else numeric) — kept local
   // rather than relying on a core export, since only bjHandValue (which
@@ -88,6 +103,11 @@
           <h3>The Push-22 rule</h3>
           <p>If the dealer's final total is exactly <b>22</b>, every remaining hand that hasn't busted pushes instead of winning — bets and any Free Bet markers are simply returned. This is what pays for all those free doubles and splits above; without it, the house edge would be far too generous to the player.</p>
 
+          <h3>Pot of Gold (side bet)</h3>
+          <p>Every time a hand at your seat gets a free double or a free split during the round, you collect one Free Bet token — shown as a gold coin next to your seat. The Pot of Gold side bet pays based on how many tokens you collect that round, win or lose on the hands themselves:</p>
+          <p><b>1 token</b> pays 3:1 · <b>2 tokens</b> pays 12:1 · <b>3 tokens</b> pays 30:1 · <b>4 tokens</b> pays 50:1 · <b>5 or more</b> pays 100:1.</p>
+          <p>Collecting zero tokens loses the side bet, and it also loses outright if the dealer has a natural blackjack, no matter what.</p>
+
           <h3>Dealer rules</h3>
           <p>Six decks. The dealer hits soft 17 and stands on hard 17 or higher. This is fixed; the dealer never chooses.</p>
 
@@ -126,6 +146,26 @@
       #${OVERLAY_ID} .fbb-push22-banner{
         text-align:center; font:800 13px/1.3 Oswald,sans-serif; color:var(--gold-bright);
         text-shadow:0 0 10px rgba(244,207,101,.4); margin:4px 0 8px;
+      }
+
+      /* The actual gold "Free Bet" token — a physical lammer graphic that
+         stacks up at a seat every time a free double/split happens,
+         mirroring the real casino chip the dealer drops on the felt. */
+      #${OVERLAY_ID} .fbb-token-stack{ display:flex; align-items:center; justify-content:center; margin-top:4px; }
+      #${OVERLAY_ID} .fbb-token{
+        width:22px; height:22px; border-radius:50%; position:relative; flex:none;
+        background:
+          radial-gradient(circle at 32% 28%, rgba(255,255,255,.65), rgba(255,255,255,0) 45%),
+          repeating-conic-gradient(from 0deg, #f4cf65 0deg 20deg, #d4af37 20deg 40deg);
+        border:2px solid #7a5c12; box-shadow:0 2px 5px rgba(0,0,0,.55);
+        display:flex; align-items:center; justify-content:center;
+      }
+      #${OVERLAY_ID} .fbb-token:not(:first-child){ margin-left:-11px; }
+      #${OVERLAY_ID} .fbb-token::after{
+        content:"F"; font:800 10px/1 "JetBrains Mono",monospace; color:#4a3608; text-shadow:0 1px 0 rgba(255,255,255,.4);
+      }
+      #${OVERLAY_ID} .fbb-token-count{
+        margin-left:6px; font:700 11px/1.4 "JetBrains Mono",monospace; color:var(--gold-bright);
       }
 
       #saltys-fbb-rules{
@@ -169,6 +209,28 @@
     `;
   }
 
+  function betSpotHtml(key, amount, active, label, small) {
+    const size = small ? 62 : 92;
+    const chipSize = small ? 15 : 22;
+    const n = amount > 0 ? Math.min(4, Math.max(1, Math.round(Math.log10(Math.max(amount, 1)) - 0.5))) : 0;
+    const pileHtml = Array.from({ length: n }, (_, i) => `
+      <div class="bet-spot-chip" style="width:${chipSize}px;height:${chipSize}px;${i > 0 ? `margin-left:-${Math.round(chipSize * 0.5)}px;` : ""}${chipStyle(amount)}"></div>`).join("");
+    return `<div class="ov-bet-spot ${active ? "active" : ""}" data-target="${key}" style="width:${size}px;height:${size}px" title="Click to select, then click or drag a chip here">
+      <div class="ov-bet-spot-ring"></div>
+      <div class="ov-bet-spot-label">${label}</div>
+      ${amount > 0
+        ? `<div class="bet-spot-pile">${pileHtml}</div><div class="ov-bet-spot-amt">${fmt(amount)}</div>`
+        : ""}
+    </div>`;
+  }
+
+  function tokenStackHtml(count) {
+    if (!count) return "";
+    const shown = Math.min(count, 5);
+    const tokens = Array.from({ length: shown }, () => `<div class="fbb-token"></div>`).join("");
+    return `<div class="fbb-token-stack">${tokens}<span class="fbb-token-count">×${count} Free Bet token${count === 1 ? "" : "s"}</span></div>`;
+  }
+
   // =====================================================================
   // SOLO MULTI-HAND — up to 5 simultaneous hands vs one dealer, one shoe.
   // =====================================================================
@@ -186,13 +248,17 @@
 
     function freshState() {
       return {
-        phase: "betting", selectedSeats: [], betPerHand: Math.min(0, MAX_BET), selectedChip: 100,
-        hands: [], dealer: [], dealerHoleHidden: true,
+        phase: "betting", selectedSeats: [], betPerHand: Math.min(0, MAX_BET),
+        potOfGoldPerHand: 0, activeBetTarget: "main", selectedChip: 100,
+        hands: [], dealer: [], dealerHoleHidden: true, seatTokens: {},
         activeHandIndex: 0, lastResults: null, lastOpeningBet: null,
       };
     }
-    function getBetFor() { return state.betPerHand; }
-    function setBetFor(_target, v) { state.betPerHand = v; }
+    function getBetFor(target) { return target === "potOfGold" ? state.potOfGoldPerHand : state.betPerHand; }
+    function setBetFor(target, v) {
+      if (target === "potOfGold") state.potOfGoldPerHand = v;
+      else state.betPerHand = v;
+    }
 
     function newHand(cards, realBet, freeBet, seatIdx) {
       return {
@@ -221,17 +287,22 @@
       return { isFree: !isTenValue };
     }
 
+    function addToken(seatIdx) {
+      state.seatTokens[seatIdx] = (state.seatTokens[seatIdx] || 0) + 1;
+    }
+
     async function startDeal() {
       if (busy) return;
       if (!state.selectedSeats.length) { toast("Select at least one seat to play."); return; }
       const bet = clamp(Math.round(state.betPerHand), MIN_BET, MAX_BET);
+      const potOfGold = clamp(Math.round(state.potOfGoldPerHand || 0), 0, MAX_BET);
       const numHands = state.selectedSeats.length;
-      const total = bet * numHands;
+      const total = (bet + potOfGold) * numHands;
       if (total > Balance.current) { toast("Not enough balance for that many seats at this bet."); return; }
       busy = true; render();
       try {
         await Balance.applyDelta(-total, "solo_fbb_deal_multi");
-        state.lastOpeningBet = { selectedSeats: [...state.selectedSeats], betPerHand: bet };
+        state.lastOpeningBet = { selectedSeats: [...state.selectedSeats], betPerHand: bet, potOfGoldPerHand: potOfGold };
       }
       catch (e) { toast("Bet failed."); busy = false; render(); return; }
       if (!shoe) shoe = new Shoe(6, 0.25, freshDeck);
@@ -243,6 +314,8 @@
       state.dealerHoleHidden = true;
       state.activeHandIndex = 0;
       state.lastResults = null;
+      state.seatTokens = {};
+      state.potOfGoldBetBySeat = potOfGold > 0 ? Object.fromEntries(seatOrder.map((s) => [s, potOfGold])) : {};
       render();
       for (let round = 0; round < 2; round++) {
         for (const hand of state.hands) {
@@ -263,13 +336,14 @@
       if (!snapshot) return false;
       state.selectedSeats = [...snapshot.selectedSeats];
       state.betPerHand = clamp(Math.round(snapshot.betPerHand * multiplier), MIN_BET, MAX_BET);
+      state.potOfGoldPerHand = clamp(Math.round((snapshot.potOfGoldPerHand || 0) * multiplier), 0, MAX_BET);
       return true;
     }
 
     async function rebet(multiplier = 1) {
       if (busy || !state.lastOpeningBet) return;
       if (!restoreOpeningBet(state.lastOpeningBet, multiplier)) return;
-      const openingTotal = state.betPerHand * state.selectedSeats.length;
+      const openingTotal = (state.betPerHand + state.potOfGoldPerHand) * state.selectedSeats.length;
       if (openingTotal > Balance.current) {
         toast(`Not enough balance to ${multiplier === 2 ? "double and rebet" : "rebet"}.`);
         return;
@@ -278,8 +352,8 @@
     }
 
     // The dealer peek: resolves any natural blackjacks immediately,
-    // exactly like standard blackjack. No side bets exist in this
-    // variant, so this is simpler than Blackjack's/Spanish 21's version.
+    // exactly like standard blackjack. Also settles the Pot of Gold side
+    // bet as an instant loss on a dealer blackjack, per the real rule.
     async function resolveDealerPeek() {
       const dealerBJ = isBlackjack(state.dealer);
       for (const hand of state.hands) {
@@ -296,6 +370,12 @@
           hand.acted = true;
           hand.status = "blackjack"; hand.result = "blackjack"; hand.profit = Math.round(hand.realBet * 1.5);
           await Balance.applyDelta(hand.realBet + hand.profit, "solo_fbb_instant_blackjack");
+        }
+      }
+      if (dealerBJ) {
+        state.potOfGoldResults = {};
+        for (const seatIdx of Object.keys(state.potOfGoldBetBySeat || {})) {
+          state.potOfGoldResults[seatIdx] = { stake: state.potOfGoldBetBySeat[seatIdx], profit: -state.potOfGoldBetBySeat[seatIdx], tokens: 0 };
         }
       }
       advanceIfResolved();
@@ -320,13 +400,12 @@
         const v = bjHandValue(hand.cards).total;
         if (v > 21) hand.status = "bust";
         else if (v === 21 || hand.isSplitAces) hand.status = "stood";
-      } else if (action === "stand") {
-        hand.status = "stood";
       } else if (action === "double") {
         const info = doubleInfo(hand);
         if (!info) { busy = false; render(); return; }
         if (info.isFree) {
           hand.freeBet = hand.realBet;
+          addToken(hand.seatIdx);
         } else {
           if (Balance.current < hand.realBet) { toast("Not enough balance to double."); busy = false; render(); return; }
           await Balance.applyDelta(-hand.realBet, "solo_fbb_double_multi");
@@ -346,6 +425,7 @@
         if (info.isFree) {
           newRealBet = 0;
           newFreeBet = hand.realBet;
+          addToken(hand.seatIdx);
         } else {
           if (Balance.current < hand.realBet) { toast("Not enough balance to split."); busy = false; render(); return; }
           await Balance.applyDelta(-hand.realBet, "solo_fbb_split_multi");
@@ -417,7 +497,6 @@
         } else {
           const val = bjHandValue(hand.cards).total;
           if (push22) {
-            // Push-22: every surviving hand pushes, no matter its total.
             hand.result = "push";
             payout = hand.realBet;
             hand.profit = 0;
@@ -438,7 +517,29 @@
         totalProfit += hand.profit;
       }
 
-      state.lastResults = { totalProfit, sawPush22: push22 && state.hands.some((h) => h.result === "push" && h.status !== "bust") };
+      // Pot of Gold: resolves purely off the number of Free Bet tokens
+      // collected at each seat this round — already an instant loss
+      // above if the dealer had a natural blackjack.
+      if (!state.potOfGoldResults) {
+        state.potOfGoldResults = {};
+        for (const seatIdx of Object.keys(state.potOfGoldBetBySeat || {})) {
+          const stake = state.potOfGoldBetBySeat[seatIdx];
+          const tokens = state.seatTokens[seatIdx] || 0;
+          const mult = potOfGoldPayoutMultiplier(tokens);
+          let profit;
+          if (mult > 0) {
+            const win = stake * mult;
+            await Balance.applyDelta(stake + win, "solo_fbb_pot_of_gold_win");
+            profit = win;
+          } else {
+            profit = -stake;
+          }
+          state.potOfGoldResults[seatIdx] = { stake, profit, tokens };
+        }
+      }
+      for (const r of Object.values(state.potOfGoldResults)) totalProfit += r.profit;
+
+      state.lastResults = { totalProfit, sawPush22: push22 };
       render();
     }
 
@@ -494,13 +595,16 @@
             ${freeBadge}${winBadge}${profitLabel}
           </div>`;
         }).join("");
+        const tokenCount = state.seatTokens[i] || 0;
+        const potOfGoldResult = state.potOfGoldResults && state.potOfGoldResults[i];
+        const potOfGoldLabel = potOfGoldResult
+          ? `<div class="ov-profit ${potOfGoldResult.profit > 0 ? "win" : "lose"}">Pot of Gold: ${potOfGoldResult.profit >= 0 ? "+" : ""}${fmt(potOfGoldResult.profit)}</div>` : "";
         return `<div class="ov-seat" style="left:${pos.left}%;top:${pos.top}%">
           <div class="row" style="gap:6px">${subHandsHtml}</div>
+          ${tokenStackHtml(tokenCount)}
+          ${potOfGoldLabel}
         </div>`;
       }).join("");
-
-      const push22Banner = state.phase === "settled" && state.lastResults && state.lastResults.sawPush22
-        ? `<div class="fbb-push22-banner">Dealer hit 22 — surviving hands push!</div>` : "";
 
       const roundSummaryHtml = state.phase === "settled" && state.lastResults ? (() => {
         const r = state.lastResults;
@@ -524,7 +628,6 @@
           </div>
           ${state.phase === "player" ? `<div class="ov-hint">Playing hand ${state.activeHandIndex + 1} of ${state.hands.length}</div>` : ""}
           ${seatHtml}
-          ${push22Banner}
           ${roundSummaryHtml}
         </div></div>`;
     }
@@ -540,7 +643,12 @@
             <div class="ov-cardslot ${picked ? "" : "empty"}" style="transform:rotate(${pos.rotate});${picked ? "border-color:var(--gold)" : ""}"></div>
           </div>`;
         }).join("");
-        const totalWager = state.betPerHand * state.selectedSeats.length;
+        const target = state.activeBetTarget || "main";
+        const betRailHtml = `<div class="ov-bet-rail">
+          ${betSpotHtml("main", state.betPerHand, target === "main", "Bet", false)}
+          ${betSpotHtml("potOfGold", state.potOfGoldPerHand, target === "potOfGold", "Pot of Gold", true)}
+        </div>`;
+        const totalWager = (state.betPerHand + (state.potOfGoldPerHand || 0)) * state.selectedSeats.length;
         root.innerHTML = rulesButtonRowHtml() + `<div class="ov-wrap"><div class="ov-table">
             ${tableBannerHtml()}
             ${shoeDecorHtml()}
@@ -548,10 +656,11 @@
             <div class="ov-hint">Click a seat, then place chips below</div>
             ${seatPickHtml}
           </div>
+          <div class="ov-bet-rail">${betRailHtml}</div>
           <div class="ov-chip-rail">
             ${renderBetControls(
               "fbb",
-              getBetFor(),
+              getBetFor(state.activeBetTarget || "main"),
               busy,
               { selectedChip: state.selectedChip }
             )}
@@ -569,15 +678,26 @@
           else toast(`You can only play up to ${MAX_HANDS} seats at once.`);
           render();
         }));
+        root.querySelectorAll(".ov-bet-spot").forEach((spot) => {
+          spot.addEventListener("click", () => { state.activeBetTarget = spot.dataset.target; render(); });
+          spot.addEventListener("dragover", (e) => { e.preventDefault(); spot.classList.add("drag-over"); });
+          spot.addEventListener("dragleave", () => spot.classList.remove("drag-over"));
+          spot.addEventListener("drop", (e) => {
+            e.preventDefault();
+            spot.classList.remove("drag-over");
+            const amt = parseInt(e.dataTransfer.getData("text/plain"), 10);
+            if (!isNaN(amt)) { setBetFor(spot.dataset.target, clamp(getBetFor(spot.dataset.target) + amt, 0, MAX_BET)); render(); }
+          });
+        });
         wireBetControls(
           root,
           "fbb",
-          () => getBetFor(),
-          (value) => { setBetFor("main", value); render(); },
+          () => getBetFor(state.activeBetTarget || "main"),
+          (value) => { setBetFor(state.activeBetTarget || "main", value); render(); },
           {
             getSelectedChip: () => state.selectedChip,
             setSelectedChip: (value) => { state.selectedChip = value; },
-            onClear: () => { state.betPerHand = 0; render(); },
+            onClear: () => { state.betPerHand = 0; state.potOfGoldPerHand = 0; render(); },
             minBet: 0,
             maxBet: MAX_BET,
           }
@@ -605,8 +725,9 @@
       } else if (state.phase === "settled") {
         const prior = state.lastOpeningBet;
         const rebetAmount = prior ? prior.betPerHand : state.betPerHand;
+        const hasSides = prior ? prior.potOfGoldPerHand : state.potOfGoldPerHand;
         controls = `<div class="row" style="justify-content:center">
-          <button class="btn primary" id="fbb-rebet">Rebet ${fmt(rebetAmount)}</button>
+          <button class="btn primary" id="fbb-rebet">Rebet ${fmt(rebetAmount)}${hasSides ? " + sides" : ""}</button>
           <button class="btn gold" id="fbb-double-rebet">2× Bet & Rebet</button>
           <button class="btn" id="fbb-again">Change Bet</button>
         </div>`;
@@ -622,10 +743,11 @@
         root.querySelector("#fbb-split").addEventListener("click", () => act("split"));
       } else if (state.phase === "settled") {
         root.querySelector("#fbb-again").addEventListener("click", () => {
-          const seats = state.selectedSeats, b = state.betPerHand;
+          const seats = state.selectedSeats, b = state.betPerHand, p = state.potOfGoldPerHand;
           state = freshState();
           state.selectedSeats = seats;
           state.betPerHand = b;
+          state.potOfGoldPerHand = p;
           render();
         });
         root.querySelector("#fbb-rebet").addEventListener("click", () => rebet(1));

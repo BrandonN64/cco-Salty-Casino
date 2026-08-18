@@ -122,15 +122,6 @@
       #${OVERLAY_ID} .ddm-card-deal{ animation: ddmDealIn .35s ease-out; }
       @keyframes ddmDealIn{ from { transform: translateY(-30px) rotate(-8deg); opacity:0; } to { transform:none; opacity:1; } }
 
-      #${OVERLAY_ID} .ddm-push22-spot{
-        position:relative; width:78px; height:78px; border-radius:50%; cursor:pointer;
-        background:radial-gradient(circle at 50% 35%, rgba(124,58,237,.3), #10261c 75%);
-        border:2px dashed var(--purple); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
-        transition:box-shadow .15s ease, border-color .15s ease, transform .15s ease;
-      }
-      #${OVERLAY_ID} .ddm-push22-spot.active{ border-style:solid; border-color:var(--purple-bright); transform:translateY(-3px); box-shadow:0 0 0 3px rgba(124,58,237,.4); }
-      #${OVERLAY_ID} .ddm-push22-spot .ov-bet-spot-label{ color:var(--purple-bright); font-size:10px; }
-      #${OVERLAY_ID} .ddm-push22-sub{ font:600 8px/1.2 "JetBrains Mono",monospace; color:var(--text-dim); text-align:center; padding:0 4px; }
       #${OVERLAY_ID} .ddm-push22-banner{
         text-align:center; font:800 13px/1.3 Oswald,sans-serif; color:var(--gold-bright);
         text-shadow:0 0 10px rgba(244,207,101,.4); margin:4px 0 8px;
@@ -181,10 +172,21 @@
     `;
   }
 
-  function push22SpotHtml(amount, active) {
-    return `<div class="ddm-push22-spot ${active ? "active" : ""}" data-target="push22" title="Optional side bet — pays ${PUSH22_PAYOUT}:1 if the dealer's final total is exactly 22">
-      <div class="ov-bet-spot-label">Push 22</div>
-      <div class="ddm-push22-sub">${amount > 0 ? fmt(amount) : "no bet"}</div>
+  // Same bet-spot markup Blackjack and Spanish 21 use for their side
+  // bets — a clickable felt circle showing a real chip pile once money's
+  // on it, rather than a plain toggle button.
+  function betSpotHtml(key, amount, active, label, small) {
+    const size = small ? 62 : 92;
+    const chipSize = small ? 15 : 22;
+    const n = amount > 0 ? Math.min(4, Math.max(1, Math.round(Math.log10(Math.max(amount, 1)) - 0.5))) : 0;
+    const pileHtml = Array.from({ length: n }, (_, i) => `
+      <div class="bet-spot-chip" style="width:${chipSize}px;height:${chipSize}px;${i > 0 ? `margin-left:-${Math.round(chipSize * 0.5)}px;` : ""}${chipStyle(amount)}"></div>`).join("");
+    return `<div class="ov-bet-spot ${active ? "active" : ""}" data-target="${key}" style="width:${size}px;height:${size}px" title="Click to select, then click or drag a chip here">
+      <div class="ov-bet-spot-ring"></div>
+      <div class="ov-bet-spot-label">${label}</div>
+      ${amount > 0
+        ? `<div class="bet-spot-pile">${pileHtml}</div><div class="ov-bet-spot-amt">${fmt(amount)}</div>`
+        : ""}
     </div>`;
   }
 
@@ -459,12 +461,10 @@
 
     function finalizeRoundSummary() {
       let totalProfit = state.insuranceProfit || 0;
-      let sawPush22 = false;
       for (const hand of state.hands) {
         totalProfit += (hand.profit || 0) + (hand.push22Profit || 0);
-        if (hand.result === "push" && hand.status !== "bust") sawPush22 = sawPush22 || bjHandValue(state.dealer).total === 22;
       }
-      state.lastResults = { totalProfit, sawPush22: bjHandValue(state.dealer).total === 22 && state.dealer.length > 0 };
+      state.lastResults = { totalProfit, sawPush22: state.dealer.length > 0 && bjHandValue(state.dealer).total === 22 };
       render();
     }
 
@@ -566,7 +566,8 @@
         }).join("");
         const target = state.activeBetTarget || "main";
         const betRailHtml = `<div class="ov-bet-rail">
-          ${push22SpotHtml(state.push22PerHand, target === "push22")}
+          ${betSpotHtml("main", state.betPerHand, target === "main", "Bet", false)}
+          ${betSpotHtml("push22", state.push22PerHand, target === "push22", "Push 22", true)}
         </div>`;
         const totalWager = (state.betPerHand + (state.push22PerHand || 0)) * state.selectedSeats.length;
         root.innerHTML = rulesButtonRowHtml() + `<div class="ov-wrap"><div class="ov-table">
@@ -585,8 +586,6 @@
               { selectedChip: state.selectedChip }
             )}
             <div class="row center" style="gap:10px;flex-wrap:wrap">
-              <button class="btn small" id="ddm-target-main" ${target === "main" ? "disabled" : ""}>Main Bet</button>
-              <button class="btn small" id="ddm-target-push22" ${target === "push22" ? "disabled" : ""}>Push 22</button>
               <span class="muted">${state.selectedSeats.length} seat${state.selectedSeats.length === 1 ? "" : "s"} · Total wager: ${fmt(totalWager)}</span>
               <button class="btn primary" id="ddm-deal" ${busy || !state.selectedSeats.length || !state.betPerHand ? "disabled" : ""}>Deal</button>
             </div>
@@ -600,10 +599,17 @@
           else toast(`You can only play up to ${MAX_HANDS} seats at once.`);
           render();
         }));
-        const mainBtn = root.querySelector("#ddm-target-main");
-        if (mainBtn) mainBtn.addEventListener("click", () => { state.activeBetTarget = "main"; render(); });
-        const push22Btn = root.querySelector("#ddm-target-push22");
-        if (push22Btn) push22Btn.addEventListener("click", () => { state.activeBetTarget = "push22"; render(); });
+        root.querySelectorAll(".ov-bet-spot").forEach((spot) => {
+          spot.addEventListener("click", () => { state.activeBetTarget = spot.dataset.target; render(); });
+          spot.addEventListener("dragover", (e) => { e.preventDefault(); spot.classList.add("drag-over"); });
+          spot.addEventListener("dragleave", () => spot.classList.remove("drag-over"));
+          spot.addEventListener("drop", (e) => {
+            e.preventDefault();
+            spot.classList.remove("drag-over");
+            const amt = parseInt(e.dataTransfer.getData("text/plain"), 10);
+            if (!isNaN(amt)) { setBetFor(spot.dataset.target, clamp(getBetFor(spot.dataset.target) + amt, 0, MAX_BET)); render(); }
+          });
+        });
         wireBetControls(
           root,
           "ddm",

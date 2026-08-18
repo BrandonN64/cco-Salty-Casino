@@ -68,7 +68,7 @@
     twoMatch: 11,       // both cards match rank only: 11:1
     oneSuitedMatch: 8,  // one card matches rank AND suit: 8:1
     mixedMatch: 15,     // one suited match + one plain rank match: 15:1
-    twoSuitedMatch: 24, // both cards match rank AND suit: 24:1
+    twoSuitedMatch: 24, // both cards match rank and suit: 24:1
   };
 
   const JACKPOT_SIDE_BET = 250_000; // same flat stake as Baccarat's qualifying bet
@@ -910,18 +910,18 @@
         const canSplit = hand && hand.cards.length === 2 && isSplittablePair(hand.cards[0], hand.cards[1]) && Balance.current >= hand.bet &&
           state.hands.filter((h) => h.seatIdx === hand.seatIdx).length < SOLO_MAX_HANDS_PER_SEAT;
         const canSurrender = hand && hand.cards.length === 2 && !hand.acted && !hand.fromSplit;
-        controls = `<div class="row center">
-          <button class="btn primary" id="sp21-hit" ${busy ? "disabled" : ""}>Hit</button>
-          <button class="btn" id="sp21-stand" ${busy ? "disabled" : ""}>Stand</button>
-          <button class="btn" id="sp21-double" ${busy || !canDouble ? "disabled" : ""} title="${!canDouble && hand && Balance.current < hand.bet ? "Not enough balance to double" : ""}">Double</button>
-          <button class="btn" id="sp21-split" ${busy || !canSplit ? "disabled" : ""}>Split</button>
+        controls = `<div class="row" style="justify-content:center;gap:10px;flex-wrap:wrap">
+          <button class="btn green" id="sp21-hit" ${busy ? "disabled" : ""}>Hit</button>
+          <button class="btn red" id="sp21-stand" ${busy ? "disabled" : ""}>Stand</button>
+          <button class="btn gold" id="sp21-double" ${busy || !canDouble ? "disabled" : ""} title="${!canDouble && hand && Balance.current < hand.bet ? "Not enough balance to double" : ""}">Double</button>
+          <button class="btn blue" id="sp21-split" ${busy || !canSplit ? "disabled" : ""}>Split</button>
           <button class="btn" id="sp21-surrender" ${busy || !canSurrender ? "disabled" : ""} title="Forfeit the hand, get half your bet back">Surrender</button>
         </div>`;
       } else if (state.phase === "settled") {
         const prior = state.lastOpeningBet;
         const rebetAmount = prior ? prior.betPerHand : state.betPerHand;
         const hasSides = prior ? (prior.sideMatchPerHand || prior.jackpotBetPerHand) : (state.sideMatchPerHand || state.jackpotBetPerHand);
-        controls = `<div class="row center">
+        controls = `<div class="row" style="justify-content:center">
           <button class="btn primary" id="sp21-rebet">Rebet ${fmt(rebetAmount)}${hasSides ? " + sides" : ""}</button>
           <button class="btn gold" id="sp21-double-rebet">2× Bet & Rebet</button>
           <button class="btn" id="sp21-again">Change Bet</button>

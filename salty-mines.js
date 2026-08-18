@@ -168,8 +168,9 @@
       }
       #${OVERLAY_ID} .mines-tile:hover:not(.revealed):not(.disabled){ border-color:var(--gold); transform:translateY(-2px); box-shadow:0 4px 10px rgba(0,0,0,.4); }
       #${OVERLAY_ID} .mines-tile.disabled{ cursor:default; }
-      #${OVERLAY_ID} .mines-tile.revealed.safe{ background:linear-gradient(145deg, #1f4a34, #0e3b2c); border-color:var(--success); color:var(--success); animation:minesTileIn .25s ease-out; }
-      #${OVERLAY_ID} .mines-tile.revealed.mine{ background:linear-gradient(145deg, #4a1414, #2b0808); border-color:var(--danger); color:var(--danger); animation:minesTileIn .25s ease-out; }
+      #${OVERLAY_ID} .mines-tile.revealed.safe{ background:linear-gradient(145deg, #1f4a34, #0e3b2c); border-color:var(--success); color:var(--success); }
+      #${OVERLAY_ID} .mines-tile.revealed.mine{ background:linear-gradient(145deg, #4a1414, #2b0808); border-color:var(--danger); color:var(--danger); }
+      #${OVERLAY_ID} .mines-tile.just-revealed{ animation:minesTileIn .25s ease-out; }
       #${OVERLAY_ID} .mines-tile.ghost-mine{ background:linear-gradient(145deg, #3a1414, #200808); border-color:rgba(229,72,77,.4); color:rgba(229,72,77,.6); opacity:.6; }
       #${OVERLAY_ID} .mines-tile.staged{ border-color:var(--purple-bright); box-shadow:0 0 0 2px rgba(124,58,237,.5); background:linear-gradient(145deg, #241a3d, #1a1230); }
       @keyframes minesTileIn{ from { transform:scale(.7) rotate(-8deg); opacity:0; } to { transform:none; opacity:1; } }
@@ -258,6 +259,7 @@
     function freshState() {
       return {
         phase: "betting", mines: DEFAULT_MINES, bet: Math.min(0, MAX_BET), selectedChip: 100, jackpotOn: false,
+        lastRevealedIdx: null,
         minePositions: null, revealed: [], picks: 0, lastResult: null, lastOpeningBet: null,
         // Autoplay
         autoMode: false, autoStagedTiles: [], autoRunning: false,
@@ -301,6 +303,7 @@
 
       state.minePositions = layMines(state.mines);
       state.revealed = [];
+      state.lastRevealedIdx = null;
       state.picks = 0;
       state.phase = "playing";
       state.currentBet = bet;
@@ -345,6 +348,7 @@
       if (state.revealed.includes(idx)) return;
       busy = true;
       state.revealed.push(idx);
+      state.lastRevealedIdx = idx;
       if (state.minePositions.has(idx)) {
         await settle("mine", 0);
       } else {
@@ -465,6 +469,13 @@
 
         render();
 
+        // Let the settled board — the mine that was just hit, or the
+        // full-clear/cash-out summary — actually sit on screen before
+        // wiping it for the next round. AUTO_ROUND_GAP_MS exists for
+        // exactly this ("pause between autoplay rounds so results are
+        // readable"), so it needs to run before the reset below, not after.
+        await delay(AUTO_ROUND_GAP_MS);
+
         // Only configured profit/loss limits, manual stop, max rounds,
         // or an inability to start the next wager stop autoplay.
         if (
@@ -490,11 +501,11 @@
         state.phase = "betting";
         state.minePositions = null;
         state.revealed = [];
+        state.lastRevealedIdx = null;
         state.picks = 0;
         state.lastResult = null;
 
         render();
-        await delay(AUTO_ROUND_GAP_MS);
       }
 
       state.autoRunning = false;
@@ -526,6 +537,7 @@
         else if (isRevealed) { cls.push("revealed", "safe"); content = "💎"; }
         else if (showMines && isMine) { cls.push("ghost-mine"); content = "💣"; }
         else if (isStaged) { cls.push("staged"); content = "🎯"; }
+        if (isRevealed && i === state.lastRevealedIdx) cls.push("just-revealed");
         if ((state.phase !== "playing" && !staging) || isRevealed) cls.push("disabled");
         return `<div class="${cls.join(" ")}" data-tile="${i}">${content}</div>`;
       }).join("")}

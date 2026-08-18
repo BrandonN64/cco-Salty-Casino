@@ -827,6 +827,7 @@
         --felt:#0e3b2c; --felt-line:#1c5c46;
         --gold:#d4af37; --gold-bright:#f4cf65;
         --purple:#7c3aed; --purple-bright:#9666f7;
+        --blue:#2f6fd6;
         --red:#c0392b; --danger:#e5484d; --success:#2fbf71;
         --text:#f4f1ea; --text-dim:#9aa4b2;
         position:fixed; inset:0; z-index:99999; display:none;
@@ -846,6 +847,12 @@
       #${OVERLAY_ID} .btn.primary{ background:var(--purple); border-color:var(--purple); }
       #${OVERLAY_ID} .btn.primary:hover{ background:var(--purple-bright); }
       #${OVERLAY_ID} .btn.gold{ background:var(--gold); border-color:var(--gold); color:#1a1400; font-weight:800; }
+      #${OVERLAY_ID} .btn.green{ background:var(--success); border-color:var(--success); color:#06210f; font-weight:800; }
+      #${OVERLAY_ID} .btn.green:hover{ filter:brightness(1.1); }
+      #${OVERLAY_ID} .btn.red{ background:var(--danger); border-color:var(--danger); color:#2a0505; font-weight:800; }
+      #${OVERLAY_ID} .btn.red:hover{ filter:brightness(1.1); }
+      #${OVERLAY_ID} .btn.blue{ background:var(--blue); border-color:var(--blue); color:#f4f8ff; font-weight:800; }
+      #${OVERLAY_ID} .btn.blue:hover{ filter:brightness(1.15); }
       #${OVERLAY_ID} .btn:disabled{ opacity:.4; cursor:not-allowed; }
       #${OVERLAY_ID} .btn.small{ padding:6px 10px; font-size:12px; border-radius:8px; }
 

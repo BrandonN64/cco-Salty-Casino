@@ -858,7 +858,7 @@
           { selectedChip: state.selectedChip }
         )}
 
-          <div class="row center" style="gap:10px;flex-wrap:wrap;margin-top:10px">
+          <div class="row" style="justify-content:center;gap:10px;flex-wrap:wrap;margin-top:10px">
             <span class="muted">
             ${state.selectedSeats.length} seat${state.selectedSeats.length === 1 ? "" : "s"}
             · Total wager: ${fmt(totalWager)}
@@ -935,15 +935,15 @@
         const canSplit = hand && hand.cards.length === 2 && isSplittablePair(hand.cards[0], hand.cards[1]) && Balance.current >= hand.bet &&
           state.hands.filter((h) => h.seatIdx === hand.seatIdx).length < SOLO_MAX_HANDS_PER_SEAT;
         const canSurrender = hand && hand.cards.length === 2 && !hand.acted && !hand.fromSplit;
-        controls = `<div class="row center">
-          <button class="btn primary" id="sbj-hit" ${busy ? "disabled" : ""}>Hit</button>
-          <button class="btn" id="sbj-stand" ${busy ? "disabled" : ""}>Stand</button>
-          <button class="btn" id="sbj-double" ${busy || !canDouble ? "disabled" : ""} title="${!canDouble && hand && Balance.current < hand.bet ? "Not enough balance to double" : ""}">Double</button>
-          <button class="btn" id="sbj-split" ${busy || !canSplit ? "disabled" : ""}>Split</button>
+        controls = `<div class="row" style="justify-content:center;gap:10px;flex-wrap:wrap">
+          <button class="btn green" id="sbj-hit" ${busy ? "disabled" : ""}>Hit</button>
+          <button class="btn red" id="sbj-stand" ${busy ? "disabled" : ""}>Stand</button>
+          <button class="btn gold" id="sbj-double" ${busy || !canDouble ? "disabled" : ""} title="${!canDouble && hand && Balance.current < hand.bet ? "Not enough balance to double" : ""}">Double</button>
+          <button class="btn blue" id="sbj-split" ${busy || !canSplit ? "disabled" : ""}>Split</button>
           <button class="btn" id="sbj-surrender" ${busy || !canSurrender ? "disabled" : ""} title="Forfeit the hand, get half your bet back">Surrender</button>
         </div>`;
       } else if (state.phase === "settled") {
-        controls = `<div class="row center">
+        controls = `<div class="row" style="justify-content:center">
           <button class="btn primary" id="sbj-rebet">Rebet ${fmt(state.betPerHand)}${state.sidePPPerHand || state.side21PerHand || state.jackpotBetPerHand ? " + sides" : ""}</button>
           <button class="btn gold" id="sbj-double-rebet">2× Bet & Rebet</button>
           <button class="btn" id="sbj-again">Change Bet</button>

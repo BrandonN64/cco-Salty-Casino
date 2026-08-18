@@ -359,7 +359,7 @@
 
     function freshState() {
       return {
-        phase: "betting", selectedSeats: [], betPerHand: Math.min(100, MAX_BET),
+        phase: "betting", selectedSeats: [], betPerHand: Math.min(0, MAX_BET),
         sidePPPerHand: 0, side21PerHand: 0, jackpotBetPerHand: false, activeBetTarget: "main", selectedChip: 100,
         hands: [], dealer: [], dealerHoleHidden: true,
         activeHandIndex: 0, insuranceOffered: false, insuranceBet: 0, insuranceProfit: 0, insuranceResolved: false, lastResults: null,

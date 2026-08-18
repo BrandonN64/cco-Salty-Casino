@@ -47,7 +47,7 @@
 
   const {
     OVERLAY_ID, Balance, fmt, toast,
-    getDb, getUid, isFirebaseConfigured,
+    getDb, getUid, getAuthReady, isFirebaseConfigured,
   } = window.SaltyCore;
 
   const GAME_LABELS = {
@@ -104,6 +104,11 @@
   }
 
   async function syncCaseClickerProfile() {
+    // New accounts race Firebase's anonymous sign-in against this sync
+    // firing on mount — getUid() is null until sign-in resolves, so wait
+    // for it here rather than silently skipping the write.
+    if (isFirebaseConfigured()) await getAuthReady();
+
     const data = await fetchCaseClickerProfile();
     if (!data) return null;
 

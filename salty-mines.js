@@ -257,7 +257,7 @@
 
     function freshState() {
       return {
-        phase: "betting", mines: DEFAULT_MINES, bet: Math.min(100, MAX_BET), selectedChip: 100, jackpotOn: false,
+        phase: "betting", mines: DEFAULT_MINES, bet: Math.min(0, MAX_BET), selectedChip: 100, jackpotOn: false,
         minePositions: null, revealed: [], picks: 0, lastResult: null, lastOpeningBet: null,
         // Autoplay
         autoMode: false, autoStagedTiles: [], autoRunning: false,

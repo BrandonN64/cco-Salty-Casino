@@ -318,7 +318,7 @@
 
     function freshState() {
       return {
-        phase: "betting", picked: [], bet: Math.min(100, MAX_BET), selectedChip: 100, jackpotOn: false,
+        phase: "betting", picked: [], bet: Math.min(0, MAX_BET), selectedChip: 100, jackpotOn: false,
         drawn: [], revealed: [], lastResult: null, lastOpeningBet: null,
         // Autoplay
         autoRunning: false, autoRoundsTotal: AUTO_DEFAULT_ROUNDS, autoRoundsPlayed: 0,

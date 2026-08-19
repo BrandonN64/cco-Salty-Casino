@@ -199,8 +199,7 @@
           <p><b>Big</b> — pays ${PAYOUTS.big}:1 if the round deals 5 or 6 cards total (and isn't a tie). <b>Small</b> — pays ${PAYOUTS.small}:1 if the round deals exactly 4 cards total.</p>
 
           <h3>Face-down dealing</h3>
-          <p>Turn on "Face-Down" and cards come out one at a time, back-up — drag from a card's top-left corner to peel it open before the next one is dealt, just like a real table's squeeze. The whole round's outcome is already decided the instant Deal is pressed; revealing a card only controls when you personally see it, so there's never a real wait — and "Reveal All" fast-forwards through the rest of the ritual any time you want.</p>
-
+<p>Turn on "Face-Down" and Player and Banker’s first two cards are dealt face-down as a four-card opening batch. Drag a card’s top-left corner to peel it open; once all four opening cards are revealed, any required third card is dealt face-down and revealed the same way. The round’s outcome is decided the instant Deal is pressed—squeezing only controls when you see each card. Use “Reveal All” at any time to fast-forward the remaining cards.</p>
           <h3>Progressive jackpot</h3>
           <p>0.05% of every wager placed here (and at the Blackjack tables) feeds one shared jackpot pool, whether or not you bet on it. <b>Collecting it is a separate matter</b> — just like a real casino progressive (Caribbean Stud, Casino Hold'em, progressive Blackjack side bets), you must place the flat <b>Jackpot</b> bet (${fmt(JACKPOT_SIDE_BET)}) on a given round to be eligible to win it that round. Without it, hitting a jackpot-tier hand pays nothing extra — the same way missing a side bet you didn't place doesn't pay you.</p>
           <p>With the Jackpot bet down, the pool pays out on baccarat's rarest hands: a Perfect Pair dealt to <b>both</b> Player and Banker (Mega — the full pool), a natural 9-9 tie (Major — 25% of the pool), or a Perfect Pair on the hand that wins with a natural (Minor — 5% of the pool). Like any other side bet, the Jackpot bet itself is lost on rounds where none of these hit.</p>
@@ -295,8 +294,23 @@
 
       #${OVERLAY_ID} .bac-card-deal{ animation: bacDealIn .35s ease-out; }
       @keyframes bacDealIn{ from { transform: translateY(-30px) rotate(-8deg); opacity:0; } to { transform:none; opacity:1; } }
-
-      #${OVERLAY_ID} .bac-hands{ display:flex; justify-content:space-around; align-items:flex-start; margin-top:10%; gap:24px; }
+      #${OVERLAY_ID} .bac-hands{
+        position:absolute;
+        inset:0;
+        pointer-events:none;
+      }
+      #${OVERLAY_ID} .bac-hand{
+        position:absolute;
+        top:52%;
+        transform:translateY(-50%);
+        pointer-events:auto;
+      }
+      #${OVERLAY_ID} .bac-hand:first-child{
+        left:8%;
+      }
+      #${OVERLAY_ID} .bac-hand:last-child{
+        right:8%;
+      }
       #${OVERLAY_ID} .bac-hand{ display:flex; flex-direction:column; align-items:center; gap:6px; }
       #${OVERLAY_ID} .bac-hand-label{ font:700 13px/1 "Oswald",sans-serif; letter-spacing:1px; text-transform:uppercase; color:var(--text-dim); }
       #${OVERLAY_ID} .bac-hand-total{
@@ -320,20 +334,38 @@
 
       /* --- corner-drag face-down reveal --- */
       #${OVERLAY_ID} .bac-squeeze-wrap{ width:68px; height:96px; perspective:700px; touch-action:none; }
+      #${OVERLAY_ID} .bac-squeeze-wrap,
+      #${OVERLAY_ID} .bac-squeeze-wrap *{
+        user-select:none;
+        -webkit-user-select:none;
+        -moz-user-select:none;
+        -webkit-touch-callout:none;
+      }
       #${OVERLAY_ID} .bac-squeeze-inner{ position:relative; width:100%; height:100%; transform-style:preserve-3d; transition:transform .3s cubic-bezier(.2,.8,.2,1); }
       #${OVERLAY_ID} .bac-squeeze-face{ position:absolute; inset:0; border-radius:9px; backface-visibility:hidden; box-shadow:0 3px 8px rgba(0,0,0,.4); }
       #${OVERLAY_ID} .bac-squeeze-front{ background:#fdfbf5; color:#111; display:flex; flex-direction:column; justify-content:space-between; padding:6px 7px; font:800 17px/1 "JetBrains Mono",ui-monospace,monospace; }
       #${OVERLAY_ID} .bac-squeeze-front.red{ color:var(--red); }
       #${OVERLAY_ID} .bac-squeeze-back{
-        background:repeating-linear-gradient(
-          135deg,
-          var(--purple),
-          var(--purple) 6px,
-          #241a3d 6px,
-          #241a3d 12px
-        );
-        border:1px solid #0006;
-        transform:rotateY(180deg);
+        background:
+          radial-gradient(
+            circle at 25% 25%,
+          rgba(255,255,255,.14) 0 1px,
+            transparent 1.5px
+          ) 0 0 / 8px 8px,
+          radial-gradient(
+            circle at 75% 75%,
+          rgba(255,255,255,.09) 0 1px,
+            transparent 1.5px
+          ) 0 0 / 8px 8px,
+          repeating-linear-gradient(
+            135deg,
+          rgba(150,102,247,.92) 0 5px,
+          #5f22bd 5px 10px
+          );
+        border:1px solid rgba(0,0,0,.55);
+        box-shadow:
+          inset 0 0 0 3px rgba(244,207,101,.18),
+          inset 0 0 0 5px rgba(0,0,0,.22);
       }
       #${OVERLAY_ID} .bac-squeeze-corner{
         position:absolute; top:0; left:0; width:26px; height:26px; cursor:grab; z-index:5;

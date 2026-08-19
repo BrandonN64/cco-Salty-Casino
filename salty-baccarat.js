@@ -298,7 +298,7 @@
         display:flex;
         justify-content:space-between;
         align-items:flex-start;
-        min-height:170px;
+        min-height:300px;
         margin:9% 7% 0;
         gap:24px;
       }

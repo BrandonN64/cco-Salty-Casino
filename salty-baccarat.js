@@ -298,8 +298,8 @@
         display:flex;
         justify-content:space-between;
         align-items:flex-start;
-        min-height:300px;
-        margin:9% 7% 0;
+        min-height:170px;
+        margin:16% 7% 0;
         gap:24px;
       }
       #${OVERLAY_ID} .bac-hand{

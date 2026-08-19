@@ -532,12 +532,7 @@
         state[hand].push(card);
         render();
         playDealSound();
-
-        if (!liveStyle) {
-          // Give the browser a paint frame between each initial card, even in
-          // face-down mode, so all four cards visibly animate onto the felt.
-          await delay(liveStyle ? 180 : BAC_DEAL_CARD_MS);
-        }
+        await delay(liveStyle ? 180 : BAC_DEAL_CARD_MS);
         return card;
       };
 

@@ -319,7 +319,6 @@
       #${OVERLAY_ID} .bac-hand:last-child{
         right:7%;
       }
-      #${OVERLAY_ID} .bac-hand{ display:flex; flex-direction:column; align-items:center; gap:6px; }
       #${OVERLAY_ID} .bac-hand-label{ font:700 13px/1 "Oswald",sans-serif; letter-spacing:1px; text-transform:uppercase; color:var(--text-dim); }
       #${OVERLAY_ID} .bac-hand-total{
         width:44px; height:44px; border-radius:50%; border:3px solid var(--gold);

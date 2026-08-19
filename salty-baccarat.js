@@ -842,18 +842,20 @@
             <div class="bac-hand">
               <div class="bac-hand-label">Player</div>
               <div class="bac-hand-cards">${state.player.map((c) => cardEl(c, false, faceDown)).join("")}</div>
-            <div class="bac-hand-total ${playerInfo.hidden ? "hidden-total" :
+              <div class="bac-hand-total ${playerInfo.hidden ? "hidden-total" :
           playerInfo.partial ? "partial-total" : ""
         }">
-              ${playerInfo.text}
+                ${playerInfo.text}
+              </div>
             </div>
             <div class="bac-hand">
               <div class="bac-hand-label">Banker</div>
               <div class="bac-hand-cards">${state.banker.map((c) => cardEl(c, false, faceDown)).join("")}</div>
-            <div class="bac-hand-total ${bankerInfo.hidden ? "hidden-total" :
+              <div class="bac-hand-total ${bankerInfo.hidden ? "hidden-total" :
           bankerInfo.partial ? "partial-total" : ""
         }">
-              ${bankerInfo.text}
+                ${bankerInfo.text}
+              </div>
             </div>
           </div>
           ${revealBtn}

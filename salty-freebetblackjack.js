@@ -32,11 +32,6 @@
 //     this is what pays for the free doubles/splits above. A dealer 22
 //     is the ONLY dealer total that doesn't just lose outright to any
 //     surviving player hand.
-//   - POT OF GOLD (side bet): pays based on how many Free Bet tokens
-//     you collect at a seat during the round — one token every time a
-//     free double or free split happens on any hand at that seat,
-//     regardless of whether the hand(s) ultimately win or lose. Loses
-//     outright to a dealer blackjack. See POT_OF_GOLD_PAYOUTS below.
 // ==/UserScript==
 (function () {
   "use strict";
@@ -51,16 +46,6 @@
   const DEALER_STANDS_SOFT_17 = false; // dealer HITS soft 17 (standard Free Bet Blackjack rule)
   const SOLO_MAX_HANDS_PER_SEAT = 4; // original + up to 3 splits (aces included)
   const MAX_HANDS = 5; // up to 5 seats at once, same as Blackjack/Spanish 21
-
-  // Pot of Gold side bet paytable — keyed by number of Free Bet tokens
-  // collected at that seat during the round (5+ tokens all pay the same,
-  // topped-out rate). Matches one of the two published commercial pay
-  // tables for this side bet.
-  const POT_OF_GOLD_PAYOUTS = { 1: 3, 2: 12, 3: 30, 4: 50, 5: 100 };
-  function potOfGoldPayoutMultiplier(tokens) {
-    if (tokens <= 0) return 0;
-    return POT_OF_GOLD_PAYOUTS[Math.min(tokens, 5)];
-  }
 
   // Local card-value helper (Ace=11, face=10, else numeric) — kept local
   // rather than relying on a core export, since only bjHandValue (which
@@ -102,11 +87,6 @@
 
           <h3>The Push-22 rule</h3>
           <p>If the dealer's final total is exactly <b>22</b>, every remaining hand that hasn't busted pushes instead of winning — bets and any Free Bet markers are simply returned. This is what pays for all those free doubles and splits above; without it, the house edge would be far too generous to the player.</p>
-
-          <h3>Pot of Gold (side bet)</h3>
-          <p>Every time a hand at your seat gets a free double or a free split during the round, you collect one Free Bet token — shown as a gold coin next to your seat. The Pot of Gold side bet pays based on how many tokens you collect that round, win or lose on the hands themselves:</p>
-          <p><b>1 token</b> pays 3:1 · <b>2 tokens</b> pays 12:1 · <b>3 tokens</b> pays 30:1 · <b>4 tokens</b> pays 50:1 · <b>5 or more</b> pays 100:1.</p>
-          <p>Collecting zero tokens loses the side bet, and it also loses outright if the dealer has a natural blackjack, no matter what.</p>
 
           <h3>Dealer rules</h3>
           <p>Six decks. The dealer hits soft 17 and stands on hard 17 or higher. This is fixed; the dealer never chooses.</p>
@@ -167,6 +147,12 @@
       #${OVERLAY_ID} .fbb-token-count{
         margin-left:6px; font:700 11px/1.4 "JetBrains Mono",monospace; color:var(--gold-bright);
       }
+
+      /* Long two-word bet-spot labels (e.g. "Pot of Gold") were left-
+         aligning inside the round felt spot instead of centering under
+         it — the shared .ov-bet-spot-label class had no text-align set,
+         so a wrapped label defaulted to left. */
+      #${OVERLAY_ID} .ov-bet-spot-label{ text-align:center; }
 
       #saltys-fbb-rules{
         position:fixed; inset:0; z-index:100002; display:flex; align-items:center; justify-content:center;
@@ -400,6 +386,8 @@
         const v = bjHandValue(hand.cards).total;
         if (v > 21) hand.status = "bust";
         else if (v === 21 || hand.isSplitAces) hand.status = "stood";
+      } else if (action === "stand") {
+        hand.status = "stood";
       } else if (action === "double") {
         const info = doubleInfo(hand);
         if (!info) { busy = false; render(); return; }

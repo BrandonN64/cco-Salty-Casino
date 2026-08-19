@@ -304,6 +304,10 @@
         display:flex; align-items:center; justify-content:center; font-weight:800; font-size:16px; margin-top:4px;
       }
       #${OVERLAY_ID} .bac-hand-total.hidden-total{ border-color:var(--border); color:var(--text-dim); font-size:11px; }
+      #${OVERLAY_ID} .bac-hand-total.partial-total{
+        border-color:var(--purple);
+        color:var(--purple-bright);
+      }
       #${OVERLAY_ID} .bac-hand-cards{ display:flex; gap:6px; min-height:96px; }
       #${OVERLAY_ID} .bac-hand-cards .card{ position:relative; }
       #${OVERLAY_ID} .bac-win-badge{
@@ -321,8 +325,15 @@
       #${OVERLAY_ID} .bac-squeeze-front{ background:#fdfbf5; color:#111; display:flex; flex-direction:column; justify-content:space-between; padding:6px 7px; font:800 17px/1 "JetBrains Mono",ui-monospace,monospace; }
       #${OVERLAY_ID} .bac-squeeze-front.red{ color:var(--red); }
       #${OVERLAY_ID} .bac-squeeze-back{
-        background:repeating-linear-gradient(135deg, var(--purple), var(--purple) 6px, #241a3d 6px, #241a3d 12px);
+        background:repeating-linear-gradient(
+          135deg,
+          var(--purple),
+          var(--purple) 6px,
+          #241a3d 6px,
+          #241a3d 12px
+        );
         border:1px solid #0006;
+        transform:rotateY(180deg);
       }
       #${OVERLAY_ID} .bac-squeeze-corner{
         position:absolute; top:0; left:0; width:26px; height:26px; cursor:grab; z-index:5;
@@ -343,7 +354,7 @@
         border-style:solid;
         border-color:var(--gold-bright);
         box-shadow:0 0 0 4px rgba(212,175,55,.42), 0 0 18px rgba(212,175,55,.28);
-        ransform:translateY(-2px) scale(1.03);
+        transform:translateY(-2px) scale(1.03);
       }
       #${OVERLAY_ID} .bac-side-label{ font:700 10px/1.2 "Oswald",sans-serif; text-transform:uppercase; letter-spacing:.4px; color:var(--text-dim); text-align:center; }
       #${OVERLAY_ID} .bac-side-pay{ font:600 9px/1 "JetBrains Mono",monospace; color:var(--text-dim); }
@@ -420,17 +431,30 @@
       return new Promise((resolve) => { revealWaiters.set(cardKey, resolve); });
     }
 
+    function waitForBatchReveal(keys) {
+      if (skipSqueeze || !keys.length) return Promise.resolve();
+      return Promise.all(keys.map((key) => waitForReveal(key)));
+    }
+
     async function startDeal() {
       if (busy) return;
+
       const wager = totalWager();
-      if (wager <= 0) { toast("Place a bet first."); return; }
-      if (wager > Balance.current) { toast("Not enough balance for that bet."); return; }
-      busy = true; render();
+      if (wager <= 0) {
+        toast("Place a bet first.");
+        return;
+      }
+      if (wager > Balance.current) {
+        toast("Not enough balance for that bet.");
+        return;
+      }
+
+      busy = true;
+      render();
+
       try {
         await Balance.applyDelta(-wager, "solo_bac_deal");
 
-        // Snapshot the opening layout only after the debit succeeds.
-        // Never derive rebet from settled results or final card state.
         state.lastOpeningBet = {
           bets: { ...state.bets },
           jackpotBet: state.jackpotBet,
@@ -442,13 +466,18 @@
         return;
       }
 
-      if (window.SaltyJackpot) window.SaltyJackpot.contribute(wager, "baccarat");
+      if (window.SaltyJackpot) {
+        window.SaltyJackpot.contribute(wager, "baccarat");
+      }
 
       if (!shoe) shoe = new Shoe(DECK_COUNT, PENETRATION);
+
       dealtAnimated.clear();
       revealWaiters.clear();
       skipSqueeze = false;
-      state.player = []; state.banker = [];
+
+      state.player = [];
+      state.banker = [];
       state.revealedKeys = new Set();
       state.lastResult = null;
 
@@ -456,45 +485,57 @@
       state.phase = liveStyle ? "revealing" : "dealing";
       render();
 
-      // Dealing pace: normal mode just animates in with a short delay
-      // between cards, same as before. Live/face-down mode deals exactly
-      // one card, waits for YOU to drag it open, then deals the next —
-      // the whole point of turning the setting on — unless "Reveal All"
-      // has been clicked, at which point skipSqueeze fast-forwards
-      // everything still left in this round.
-      const draw = async (hand) => {
+      // This draws cards without waiting between individual cards in
+      // face-down mode. Waiting happens after the whole batch is dealt.
+      const dealOne = async (hand) => {
         const card = shoe.draw();
         state[hand].push(card);
         render();
         playDealSound();
-        if (liveStyle && !skipSqueeze) {
-          await waitForReveal(card._key);
-        } else {
+
+        if (!liveStyle) {
           await delay(BAC_DEAL_CARD_MS);
         }
+
         return card;
       };
 
-      await draw("player");
-      await draw("banker");
-      await draw("player");
-      await draw("banker");
+      // Deal the initial Player / Banker / Player / Banker cards as one
+      // batch. In face-down mode, all four are on the felt before a reveal
+      // is required.
+      const initialKeys = [];
+
+      for (const hand of ["player", "banker", "player", "banker"]) {
+        const card = await dealOne(hand);
+        initialKeys.push(card._key);
+      }
+
+      await waitForBatchReveal(initialKeys);
 
       let playerThirdValue = null;
       const playerNatural = bacHandTotal(state.player) >= 8;
       const bankerNatural = bacHandTotal(state.banker) >= 8;
+      const extraKeys = [];
+
       if (!playerNatural && !bankerNatural) {
         if (playerDraws(bacHandTotal(state.player))) {
-          const card = await draw("player");
+          const card = await dealOne("player");
+          extraKeys.push(card._key);
           playerThirdValue = bacCardValue(card);
         }
+
         if (bankerDraws(bacHandTotal(state.banker), playerThirdValue)) {
-          await draw("banker");
+          const card = await dealOne("banker");
+          extraKeys.push(card._key);
         }
       }
 
+      // Third card(s), if required, are a second squeeze batch.
+      await waitForBatchReveal(extraKeys);
+
       const playerTotal = bacHandTotal(state.player);
       const bankerTotal = bacHandTotal(state.banker);
+
       let winner = "tie";
       if (playerTotal > bankerTotal) winner = "player";
       else if (bankerTotal > playerTotal) winner = "banker";
@@ -508,9 +549,10 @@
       await settle();
 
       if (!liveStyle) {
-        state.player.forEach((c) => state.revealedKeys.add(c._key));
-        state.banker.forEach((c) => state.revealedKeys.add(c._key));
+        state.player.forEach((card) => state.revealedKeys.add(card._key));
+        state.banker.forEach((card) => state.revealedKeys.add(card._key));
       }
+
       state.phase = "settled";
       busy = false;
       render();
@@ -653,7 +695,10 @@
           if (open) {
             state.revealedKeys.add(key);
             const waiter = revealWaiters.get(key);
-            if (waiter) { revealWaiters.delete(key); waiter(); }
+            if (waiter) {
+              revealWaiters.delete(key);
+              waiter();
+            }
             render();
           }
         };
@@ -672,7 +717,6 @@
         wrap.addEventListener("pointerup", endDrag);
         wrap.addEventListener("pointercancel", endDrag);
         wrap.addEventListener("dblclick", () => commit(true));
-        wrap.addEventListener("click", () => { if (!dragging) commit(true); });
       });
     }
 
@@ -681,22 +725,65 @@
     // than making you squeeze the rest one by one.
     function revealAll() {
       skipSqueeze = true;
-      [...state.player, ...state.banker].forEach((c) => state.revealedKeys.add(c._key));
+      [...state.player, ...state.banker].forEach((card) => {
+        state.revealedKeys.add(card._key);
+      });
       revealWaiters.forEach((resolve) => resolve());
       revealWaiters.clear();
       render();
     }
 
+    function handTotalInfo(cards, finalTotal, natural) {
+      if (!cards.length) {
+        return { text: "", hidden: false, partial: false };
+      }
+
+      const squeezing = state.phase === "revealing" && faceDownEnabled();
+
+      // Normal dealing or post-settlement: show the final total.
+      if (!squeezing) {
+        return {
+          text: `${finalTotal}${natural ? " ★" : ""}`,
+          hidden: false,
+          partial: false,
+        };
+      }
+
+      // Face-down mode: calculate from only the cards revealed so far.
+      const revealed = cards.filter((card) =>
+        state.revealedKeys.has(card._key)
+      );
+
+      if (!revealed.length) {
+        return { text: "?", hidden: true, partial: false };
+      }
+
+      const allRevealed = revealed.length === cards.length;
+
+      return {
+        text: `${bacHandTotal(revealed)}${allRevealed && natural ? " ★" : ""
+          }`,
+        hidden: false,
+        partial: !allRevealed,
+      };
+    }
+
     function renderTable() {
-      const faceDown = (state.phase === "revealing" || state.phase === "dealing") ? faceDownEnabled() : false;
-      const playerRevealed = state.player.filter((c) => state.revealedKeys.has(c.key));
-      const bankerRevealed = state.banker.filter((c) => state.revealedKeys.has(c.key));
-      const playerLabel = playerRevealed.length
-        ? `${bacHandTotal(playerRevealed)}${state.phase === "settled" && state.playerNatural ? " ★" : ""}`
-        : "?";
-      const bankerLabel = bankerRevealed.length
-        ? `${bacHandTotal(bankerRevealed)}${state.phase === "settled" && state.bankerNatural ? " ★" : ""}`
-        : "?";
+      const faceDown =
+        (state.phase === "revealing" || state.phase === "dealing") &&
+        faceDownEnabled();
+
+      const playerInfo = handTotalInfo(
+        state.player,
+        state.playerTotal,
+        state.playerNatural
+      );
+
+      const bankerInfo = handTotalInfo(
+        state.banker,
+        state.bankerTotal,
+        state.bankerNatural
+      );
 
       const resultHtml = state.phase === "settled" && state.lastResult ? (() => {
         const r = state.lastResult;
@@ -722,12 +809,18 @@
             <div class="bac-hand">
               <div class="bac-hand-label">Player</div>
               <div class="bac-hand-cards">${state.player.map((c) => cardEl(c, false, faceDown)).join("")}</div>
-              <div class="bac-hand-total ${playerRevealed.length ? "" : "hidden-total"}">${playerLabel}</div>
+            <div class="bac-hand-total ${playerInfo.hidden ? "hidden-total" :
+          playerInfo.partial ? "partial-total" : ""
+        }">
+              ${playerInfo.text}
             </div>
             <div class="bac-hand">
               <div class="bac-hand-label">Banker</div>
               <div class="bac-hand-cards">${state.banker.map((c) => cardEl(c, false, faceDown)).join("")}</div>
-              <div class="bac-hand-total ${bankerRevealed.length ? "" : "hidden-total"}">${bankerLabel}</div>
+            <div class="bac-hand-total ${bankerInfo.hidden ? "hidden-total" :
+          bankerInfo.partial ? "partial-total" : ""
+        }">
+              ${bankerInfo.text}
             </div>
           </div>
           ${revealBtn}
@@ -915,7 +1008,7 @@
   <button class="btn" id="bac-again">Change Bet</button>
 </div>`;
       } else {
-        controls = `<div class="center muted">${state.phase === "dealing" ? "Dealing…" : "Squeeze the card to reveal it…"}</div>`;
+        controls = `<div class="center muted">${state.phase === "dealing" ? "Dealing…" : "Drag the cards to reveal them…"}</div>`;
       }
 
       root.innerHTML = jackpotBanner + rulesButtonRowHtml() + renderTable() + `<div class="mt16">${controls}</div>`;

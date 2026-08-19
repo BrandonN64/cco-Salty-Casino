@@ -350,7 +350,7 @@
             hand.status = "push"; hand.result = "push"; hand.profit = 0;
             await Balance.applyDelta(hand.realBet, "solo_fbb_instant_push");
           } else {
-            hand.status = "push"; hand.result = "lose"; hand.profit = -hand.realBet;
+            hand.status = "lose"; hand.result = "lose"; hand.profit = -hand.realBet;
           }
         } else if (handBJ) {
           hand.acted = true;
@@ -364,13 +364,15 @@
           state.potOfGoldResults[seatIdx] = { stake: state.potOfGoldBetBySeat[seatIdx], profit: -state.potOfGoldBetBySeat[seatIdx], tokens: 0 };
         }
       }
-      advanceIfResolved();
+      await advanceIfResolved();
     }
 
     function currentHand() { return state.hands[state.activeHandIndex]; }
-    function advanceIfResolved() {
+    async function advanceIfResolved() {
       while (state.activeHandIndex < state.hands.length && state.hands[state.activeHandIndex].status !== "active") state.activeHandIndex++;
-      if (state.activeHandIndex >= state.hands.length) runDealer();
+      if (state.activeHandIndex >= state.hands.length) {
+        await runDealer();
+      }
     }
 
     async function act(action) {
@@ -444,12 +446,13 @@
           newH.status = "stood";
         }
       }
-      advanceIfResolved();
+      await advanceIfResolved();
       busy = false;
       render();
     }
 
     async function runDealer() {
+      if (state.phase === "dealer" || state.phase === "settled") return;
       state.phase = "dealer";
       state.dealerHoleHidden = false;
       render();
@@ -647,11 +650,11 @@
           <div class="ov-bet-rail">${betRailHtml}</div>
           <div class="ov-chip-rail">
             ${renderBetControls(
-              "fbb",
-              getBetFor(state.activeBetTarget || "main"),
-              busy,
-              { selectedChip: state.selectedChip }
-            )}
+          "fbb",
+          getBetFor(state.activeBetTarget || "main"),
+          busy,
+          { selectedChip: state.selectedChip }
+        )}
             <div class="row center" style="gap:10px;flex-wrap:wrap">
               <span class="muted">${state.selectedSeats.length} seat${state.selectedSeats.length === 1 ? "" : "s"} · Total wager: ${fmt(totalWager)}</span>
               <button class="btn primary" id="fbb-deal" ${busy || !state.selectedSeats.length || !state.betPerHand ? "disabled" : ""}>Deal</button>

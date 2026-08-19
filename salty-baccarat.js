@@ -295,29 +295,27 @@
       #${OVERLAY_ID} .bac-card-deal{ animation: bacDealIn .35s ease-out; }
       @keyframes bacDealIn{ from { transform: translateY(-30px) rotate(-8deg); opacity:0; } to { transform:none; opacity:1; } }
       #${OVERLAY_ID} .bac-hands{
-        position:absolute;
-        inset:0;
-        min-height:0;
-        pointer-events:none;
-      }
-      #${OVERLAY_ID} .ov-table:has(.bac-hands){
-        min-height:460px;
+        display:flex;
+        justify-content:space-between;
+        align-items:flex-start;
+        min-height:170px;
+        margin:9% 7% 0;
+        gap:24px;
       }
       #${OVERLAY_ID} .bac-hand{
-        position:absolute;
-        top:50%;
-        transform:translateY(-50%);
+        position:relative;
         display:flex;
         flex-direction:column;
         align-items:center;
         gap:6px;
+        flex:0 0 auto;
         pointer-events:auto;
       }
       #${OVERLAY_ID} .bac-hand:first-child{
-        left:7%;
+        margin-right:auto;
       }
       #${OVERLAY_ID} .bac-hand:last-child{
-        right:7%;
+        margin-left:auto;
       }
       #${OVERLAY_ID} .bac-hand-label{ font:700 13px/1 "Oswald",sans-serif; letter-spacing:1px; text-transform:uppercase; color:var(--text-dim); }
       #${OVERLAY_ID} .bac-hand-total{

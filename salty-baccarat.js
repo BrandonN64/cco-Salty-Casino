@@ -529,7 +529,7 @@
         state[hand].push(card);
         render();
         playDealSound();
-        await delay(liveStyle ? 180 : BAC_DEAL_CARD_MS);
+        await delay(liveStyle ? 250 : BAC_DEAL_CARD_MS);
         return card;
       };
 

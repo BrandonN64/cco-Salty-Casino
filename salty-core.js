@@ -775,7 +775,16 @@
     // Rejects if it would take balance below zero. Returns the new balance.
     // Also updates the `stats` aggregate in the same transaction — see
     // NOTE (STATS) at the top of this file.
-    async applyDelta(delta, reason) {
+    // delta: amount to add (negative for a debit). reason: ledger/stats tag.
+    // opts.logLedger (default true): false rolls this delta into
+    //   pendingRoundDelta instead of writing a new ledger document — use
+    //   this for every mid-round action, then call settleRound() once at
+    //   the end to flush it as a single entry.
+    // opts.roundState ({gameKey, snapshot}): piggyback a round-persistence
+    //   snapshot onto this same document write, at no extra write cost.
+    //   snapshot: null clears that game's saved round.
+    async applyDelta(delta, reason, opts = {}) {
+      const { logLedger = true, roundState = null } = opts;
       const atMs = Date.now();
       if (!firebaseConfigured) {
         this.current = Math.max(0, this.current + delta);
@@ -793,15 +802,93 @@
         const next = bal + delta;
         if (next < 0) throw new Error("insufficient-balance");
         const nextStats = computeUpdatedStats(data.stats || emptyStats(), delta, reason, atMs);
-        tx.update(ref, { balance: next, stats: nextStats, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
-        const ledgerRef = ref.collection("ledger").doc();
-        tx.set(ledgerRef, {
-          delta, reason, balanceAfter: next,
-          at: firebase.firestore.FieldValue.serverTimestamp(),
-        });
+
+        const payload = { balance: next, stats: nextStats, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
+        if (roundState) {
+          payload[`activeRounds.${roundState.gameKey}`] =
+            roundState.snapshot === null ? firebase.firestore.FieldValue.delete() : roundState.snapshot;
+        }
+
+        if (logLedger) {
+          tx.update(ref, payload);
+          const ledgerRef = ref.collection("ledger").doc();
+          tx.set(ledgerRef, {
+            delta, reason, balanceAfter: next,
+            at: firebase.firestore.FieldValue.serverTimestamp(),
+          });
+        } else {
+          payload.pendingRoundDelta = (data.pendingRoundDelta || 0) + delta;
+          tx.update(ref, payload);
+        }
         return next;
       });
       return newBal;
+    },
+
+    // Call once, right when a round is fully settled. Applies the final
+    // delta (pass 0 if the last mid-round action already covered
+    // everything), clears the round's persisted state, and flushes every
+    // pendingRoundDelta accumulated via applyDelta(..., {logLedger:false})
+    // into ONE ledger entry — costs exactly 2 writes total for the whole
+    // round, regardless of how many actions happened along the way.
+    async settleRound(gameKey, finalDelta, reason) {
+      const atMs = Date.now();
+      if (!firebaseConfigured) {
+        this.current = Math.max(0, this.current + finalDelta);
+        this.statsCurrent = computeUpdatedStats(this.statsCurrent || emptyStats(), finalDelta, reason, atMs);
+        this._emit();
+        this._emitStats();
+        return this.current;
+      }
+      await authReady;
+      const ref = db.collection("players").doc(uid);
+      const newBal = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const data = snap.data();
+        const bal = data.balance;
+        const next = bal + finalDelta;
+        if (next < 0) throw new Error("insufficient-balance");
+        const nextStats = computeUpdatedStats(data.stats || emptyStats(), finalDelta, reason, atMs);
+        const totalForLedger = (data.pendingRoundDelta || 0) + finalDelta;
+
+        tx.update(ref, {
+          balance: next,
+          stats: nextStats,
+          pendingRoundDelta: 0,
+          [`activeRounds.${gameKey}`]: firebase.firestore.FieldValue.delete(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        });
+        if (totalForLedger !== 0) {
+          const ledgerRef = ref.collection("ledger").doc();
+          tx.set(ledgerRef, {
+            delta: totalForLedger, reason, balanceAfter: next,
+            at: firebase.firestore.FieldValue.serverTimestamp(),
+          });
+        }
+        return next;
+      });
+      return newBal;
+    },
+
+    // Persist a mid-round snapshot without changing balance — for actions
+    // like a plain hit/stand or a mines tile-reveal with no payout, where
+    // there's no other write to piggyback on. Use sparingly (this is a
+    // genuinely new write each time); prefer applyDelta's roundState opt
+    // wherever an action already changes the balance.
+    async saveRoundState(gameKey, snapshot) {
+      if (!firebaseConfigured) return;
+      await authReady;
+      const ref = db.collection("players").doc(uid);
+      await ref.set({ [`activeRounds.${gameKey}`]: snapshot }, { merge: true });
+    },
+
+    async loadRoundState(gameKey) {
+      if (!firebaseConfigured) return null;
+      await authReady;
+      const ref = db.collection("players").doc(uid);
+      const snap = await ref.get();
+      const rounds = snap.exists ? snap.data().activeRounds : null;
+      return (rounds && rounds[gameKey]) || null;
     },
 
     async setHandle(name) {

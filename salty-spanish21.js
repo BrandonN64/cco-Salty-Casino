@@ -421,7 +421,7 @@
       if (total > Balance.current) { toast("Not enough balance for that many seats at this bet."); return; }
       busy = true; render();
       try {
-        await Balance.applyDelta(-total, "solo_sp21_deal_multi");
+        await Balance.applyDelta(-total, "solo_sp21_deal_multi", { logLedger: false });
         state.lastOpeningBet = {
           selectedSeats: [...state.selectedSeats],
           betPerHand: bet,
@@ -522,17 +522,30 @@
           hand.acted = true;
           if (handBJ) {
             hand.status = "push"; hand.result = "push"; hand.profit = 0;
-            await Balance.applyDelta(hand.bet, "solo_sp21_instant_push");
+            await Balance.applyDelta(hand.bet, "solo_sp21_instant_push", { logLedger: false });
           } else {
             hand.status = "push"; hand.result = "lose"; hand.profit = -hand.bet;
           }
         } else if (handBJ) {
           hand.acted = true;
           hand.status = "blackjack"; hand.result = "blackjack"; hand.profit = Math.round(hand.bet * 1.5);
-          await Balance.applyDelta(hand.bet + hand.profit, "solo_sp21_instant_blackjack");
+          await Balance.applyDelta(hand.bet + hand.profit, "solo_sp21_instant_blackjack", { logLedger: false });
         }
       }
       advanceIfResolved();
+      if (state.phase === "player") saveMidRoundState();
+    }
+
+    function buildRoundSnapshot() {
+      return {
+        hands: state.hands,
+        dealer: state.dealer,
+        dealerHoleHidden: state.dealerHoleHidden,
+        activeHandIndex: state.activeHandIndex,
+      };
+    }
+    function saveMidRoundState() {
+      Balance.saveRoundState("spanish21", buildRoundSnapshot()).catch(() => {});
     }
 
     function currentHand() { return state.hands[state.activeHandIndex]; }
@@ -559,7 +572,7 @@
         hand.status = "stood";
       } else if (action === "double") {
         if (Balance.current < hand.bet) { toast("Not enough balance to double."); busy = false; render(); return; }
-        await Balance.applyDelta(-hand.bet, "solo_sp21_double_multi");
+        await Balance.applyDelta(-hand.bet, "solo_sp21_double_multi", { logLedger: false });
         hand.bet *= 2;
         hand.doubled = true;
         hand.cards.push(shoe.draw());
@@ -570,7 +583,7 @@
       } else if (action === "split") {
         const [c0, c1] = hand.cards;
         if (Balance.current < hand.bet) { toast("Not enough balance to split."); busy = false; render(); return; }
-        await Balance.applyDelta(-hand.bet, "solo_sp21_split_multi");
+        await Balance.applyDelta(-hand.bet, "solo_sp21_split_multi", { logLedger: false });
         const isAces = c0.r === "A";
         const newH = newHand([c1], hand.bet, 0, 0, hand.seatIdx);
         newH.isSplitAces = isAces;
@@ -595,11 +608,12 @@
         // "stood" here; they just continue like any other hand.
       } else if (action === "surrender") {
         if (hand.acted || hand.cards.length !== 2 || hand.fromSplit) { busy = false; render(); return; }
-        await Balance.applyDelta(Math.round(hand.bet * SURRENDER_RETURN_FRACTION), "solo_sp21_surrender");
+        await Balance.applyDelta(Math.round(hand.bet * SURRENDER_RETURN_FRACTION), "solo_sp21_surrender", { logLedger: false });
         hand.status = "surrender"; hand.result = "surrender"; hand.acted = true;
         hand.profit = -Math.round(hand.bet * (1 - SURRENDER_RETURN_FRACTION));
       }
       advanceIfResolved();
+      if (state.phase === "player") saveMidRoundState();
       busy = false;
       render();
     }
@@ -656,7 +670,7 @@
             hand.result = "lose";
           }
         }
-        if (payout > 0) await Balance.applyDelta(payout, "solo_sp21_settle_multi");
+        if (payout > 0) await Balance.applyDelta(payout, "solo_sp21_settle_multi", { logLedger: false });
         const mainProfit = hand.profit != null ? hand.profit : payout - hand.bet;
         if (hand.profit == null) hand.profit = mainProfit;
         handProfitTotal += mainProfit;
@@ -669,14 +683,14 @@
           const bonus = evalBonus21(hand.cards, dealerUp);
           if (bonus) {
             const win = Math.round(hand.bet * bonus.multiplier);
-            await Balance.applyDelta(win, "solo_sp21_bonus21");
+            await Balance.applyDelta(win, "solo_sp21_bonus21", { logLedger: false });
             bonusProfit += win;
             hand.bonusHit = bonus.isSuperBonus ? "Super Bonus!" : "Bonus 21";
 
             if (bonus.isSuperBonus && hand.sideBets.jackpot > 0 && window.SaltyJackpot) {
               const jpPayout = await window.SaltyJackpot.award(JACKPOT_TIER, "spanish21", "Super Bonus: suited 7-7-7 vs dealer 7", true);
               if (jpPayout > 0) {
-                await Balance.applyDelta(hand.sideBets.jackpot + jpPayout, "solo_sp21_jackpot_win");
+                await Balance.applyDelta(hand.sideBets.jackpot + jpPayout, "solo_sp21_jackpot_win", { logLedger: false });
                 hand.jackpotProfit = jpPayout;
                 jackpotProfitTotal += jpPayout;
               } else {
@@ -705,7 +719,7 @@
           const r = hand.sideBetResults.match;
           if (r) {
             const win = matchStake * MATCH_DEALER_PAYOUTS[r] + matchStake;
-            await Balance.applyDelta(win, "solo_sp21_match_win");
+            await Balance.applyDelta(win, "solo_sp21_match_win", { logLedger: false });
             sbProfit += win - matchStake;
           } else {
             sbProfit -= matchStake;
@@ -717,6 +731,7 @@
       }
 
       state.lastResults = { totalProfit, handProfitTotal, sideBetProfitTotal, bonusProfitTotal, jackpotProfitTotal };
+      await Balance.settleRound("spanish21", 0, "solo_sp21_round_complete");
       render();
     }
 
@@ -974,6 +989,18 @@
           });
         }
         render();
+
+        Balance.loadRoundState("spanish21").then((saved) => {
+          if (!saved || root !== el) return;
+          if (!shoe) shoe = new Shoe(6, 0.25, freshSpanishDeck);
+          state.hands = saved.hands;
+          state.dealer = saved.dealer;
+          state.dealerHoleHidden = saved.dealerHoleHidden;
+          state.activeHandIndex = saved.activeHandIndex;
+          state.phase = "player";
+          render();
+        }).catch(() => {});
+
         return () => {
           if (jackpotUnsub) jackpotUnsub();
           root = null;

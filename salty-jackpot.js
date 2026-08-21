@@ -181,6 +181,10 @@
   //
   // Returns the payout amount actually awarded (0 if `qualified` is falsy
   // or the tier doesn't exist).
+  // Returns the jackpot payout (0 if none/not qualified). Does NOT credit
+  // the player's balance — the caller folds this into its own
+  // settleRound()/applyDelta() call. Keeping this pool-only means a
+  // jackpot win costs one write (the pool transaction) instead of two.
   async function award(tierId, gameId, meta, qualified) {
     const tier = getTier(tierId);
     if (!tier) return 0;
@@ -194,7 +198,6 @@
       pool.amount = Math.max(SEED_AMOUNT, +((pool.amount || SEED_AMOUNT) - payout).toFixed(2));
       writeLocal(pool);
       broadcast(pool);
-      await Balance.applyDelta(payout, `jackpot_${tierId}_${gameId || "unknown"}`);
       return payout;
     }
 
@@ -212,7 +215,6 @@
         });
       });
     } catch (e) { payout = 0; }
-    if (payout > 0) await Balance.applyDelta(payout, `jackpot_${tierId}_${gameId || "unknown"}`);
     return payout;
   }
 

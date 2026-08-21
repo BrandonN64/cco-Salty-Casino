@@ -37,6 +37,7 @@
   } = window.SaltyCore;
 
   const GRID_SIZE = 25; // 5x5
+  const ROUND_SAVE_INTERVAL = 3; // persist every 3rd safe reveal, not every single one — a resumed round replaying 1-2 already-known-safe picks is a trivial cost, and cuts write volume ~3x
   const GRID_COLS = 5;
   const MIN_MINES = 1;
   const MAX_MINES = 24;
@@ -284,8 +285,25 @@
       const total = bet + jp;
       if (total > Balance.current) { toast("Not enough balance for that bet."); return; }
       busy = true; render();
+
+      // Lay mines before the round is even funded, so the layout is fixed
+      // for the whole round — a crash-and-resume replays into the same
+      // board rather than getting a fresh roll.
+      const minePositions = layMines(state.mines);
+      const roundSnapshot = {
+        mines: state.mines,
+        minePositions: [...minePositions],
+        revealed: [],
+        picks: 0,
+        bet,
+        jackpotStake: jp,
+      };
+
       try {
-        await Balance.applyDelta(-total, "solo_mines_bet");
+        await Balance.applyDelta(-total, "solo_mines_bet", {
+          logLedger: false,
+          roundState: { gameKey: "mines", snapshot: roundSnapshot },
+        });
 
         // Save only the original configuration of a successfully funded round.
         // Do not derive rebet from picks, multiplier, or final result state.
@@ -301,7 +319,7 @@
       }
       catch (e) { toast("Bet failed."); busy = false; render(); return; }
 
-      state.minePositions = layMines(state.mines);
+      state.minePositions = minePositions;
       state.revealed = [];
       state.lastRevealedIdx = null;
       state.picks = 0;
@@ -358,6 +376,19 @@
           // Full clear — nothing left to reveal, round ends automatically.
           await settle("clear", multiplierFor(state.mines, state.picks));
         } else {
+          // Safe reveal that doesn't end the round: no balance change to
+          // piggyback on, so this is a genuinely new write — throttle it
+          // rather than saving every single tile.
+          if (state.picks % ROUND_SAVE_INTERVAL === 0) {
+            Balance.saveRoundState("mines", {
+              mines: state.mines,
+              minePositions: [...state.minePositions],
+              revealed: [...state.revealed],
+              picks: state.picks,
+              bet: state.currentBet,
+              jackpotStake: state.currentJackpotStake,
+            }).catch(() => {});
+          }
           render();
         }
       }
@@ -396,7 +427,12 @@
       }
 
       const roundPayout = mainWin + jackpotPayout;
-      if (roundPayout > 0) await Balance.applyDelta(roundPayout, "solo_mines_settle");
+      // Unconditional: even on a total loss (roundPayout === 0), this still
+      // needs to run — it clears the persisted round and flushes the bet's
+      // debit (logged with logLedger:false at deal time) into one ledger
+      // entry. Skipping it on a loss would leave the round "resumable"
+      // forever and the debit permanently unflushed.
+      await Balance.settleRound("mines", roundPayout, "solo_mines_settle");
 
       const mainProfit = mainWin - bet;
       state.lastResult = {
@@ -782,6 +818,24 @@
           });
         }
         render();
+
+        // Resume a round left mid-play by a crash/refresh (resolveAbandonedRound
+        // below already handles a normal tab-switch away — this covers the
+        // case nothing ran to close it out cleanly).
+        Balance.loadRoundState("mines").then((saved) => {
+          if (!saved || root !== el) return;
+          state.mines = saved.mines;
+          state.minePositions = new Set(saved.minePositions);
+          state.revealed = [...saved.revealed];
+          state.lastRevealedIdx = saved.revealed.length ? saved.revealed[saved.revealed.length - 1] : null;
+          state.picks = saved.picks;
+          state.phase = "playing";
+          state.currentBet = saved.bet;
+          state.currentJackpotStake = saved.jackpotStake;
+          state.bet = saved.bet;
+          render();
+        }).catch(() => {});
+
         return () => {
           resolveAbandonedRound();
           if (jackpotUnsub) jackpotUnsub();

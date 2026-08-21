@@ -237,7 +237,7 @@
       if (total > Balance.current) { toast("Not enough balance for that many seats at this bet."); return; }
       busy = true; render();
       try {
-        await Balance.applyDelta(-total, "solo_ddm_deal_multi");
+        await Balance.applyDelta(-total, "solo_ddm_deal_multi", { logLedger: false });
         state.lastOpeningBet = { selectedSeats: [...state.selectedSeats], betPerHand: bet, push22PerHand: push22 };
       }
       catch (e) { toast("Bet failed."); busy = false; render(); return; }
@@ -296,7 +296,7 @@
       const totalBet = state.hands.reduce((s, h) => s + h.wager, 0);
       const cost = Math.round(totalBet / 2);
       if (Balance.current < cost) { toast("Not enough balance for insurance."); return; }
-      await Balance.applyDelta(-cost, "solo_ddm_insurance");
+      await Balance.applyDelta(-cost, "solo_ddm_insurance", { logLedger: false });
       state.insuranceBet = cost;
       state.insuranceOffered = false;
       render();
@@ -315,7 +315,7 @@
         state.dealerHoleHidden = false;
         if (state.insuranceBet > 0) {
           state.insuranceProfit = state.insuranceBet * 2;
-          await Balance.applyDelta(state.insuranceBet + state.insuranceProfit, "solo_ddm_insurance_win");
+          await Balance.applyDelta(state.insuranceBet + state.insuranceProfit, "solo_ddm_insurance_win", { logLedger: false });
         }
         state.insuranceResolved = true;
         for (const hand of state.hands) {
@@ -325,7 +325,7 @@
           hand.profit = -hand.wager;
         }
         state.phase = "settled";
-        finalizeRoundSummary();
+        await finalizeRoundSummary();
         return;
       }
       if (state.insuranceBet > 0) {
@@ -333,6 +333,23 @@
         state.insuranceResolved = true;
       }
       advanceIfResolved();
+      if (state.phase === "player") saveMidRoundState();
+    }
+
+    function buildRoundSnapshot() {
+      return {
+        hands: state.hands,
+        dealer: state.dealer,
+        dealerHoleHidden: state.dealerHoleHidden,
+        activeHandIndex: state.activeHandIndex,
+        insuranceOffered: state.insuranceOffered,
+        insuranceBet: state.insuranceBet,
+        insuranceProfit: state.insuranceProfit,
+        insuranceResolved: state.insuranceResolved,
+      };
+    }
+    function saveMidRoundState() {
+      Balance.saveRoundState("doubledownmadness", buildRoundSnapshot()).catch(() => {});
     }
 
     function currentHand() { return state.hands[state.activeHandIndex]; }
@@ -352,7 +369,7 @@
         const suited = hand.cards[0].s === hand.cards[1].s;
         const mult = suited ? BLACKJACK_SUITED_PAYOUT : BLACKJACK_UNSUITED_PAYOUT;
         hand.profit = Math.round(hand.wager * mult);
-        Balance.applyDelta(hand.wager + hand.profit, "solo_ddm_blackjack");
+        Balance.applyDelta(hand.wager + hand.profit, "solo_ddm_blackjack", { logLedger: false }).catch(() => {});
       } else if (total > 21) {
         hand.status = "bust";
       } else if (total === 21) {
@@ -377,7 +394,7 @@
       } else if (action === "double") {
         const increment = hand.nextDoubleIncrement;
         if (Balance.current < increment) { toast("Not enough balance to double."); busy = false; render(); return; }
-        await Balance.applyDelta(-increment, "solo_ddm_double_multi");
+        await Balance.applyDelta(-increment, "solo_ddm_double_multi", { logLedger: false });
         hand.wager += increment;
         hand.nextDoubleIncrement = increment * 2;
         hand.cards.push(shoe.draw());
@@ -386,6 +403,7 @@
         checkHandAfterDraw(hand);
       }
       advanceIfResolved();
+      if (state.phase === "player") saveMidRoundState();
       busy = false;
       render();
     }
@@ -441,7 +459,7 @@
             hand.profit = -hand.wager;
           }
         }
-        if (payout > 0) await Balance.applyDelta(payout, "solo_ddm_settle_multi");
+        if (payout > 0) await Balance.applyDelta(payout, "solo_ddm_settle_multi", { logLedger: false });
       }
 
       // Push 22 side bet resolves off the dealer's real final total,
@@ -450,21 +468,26 @@
         if (!hand.push22) continue;
         if (push22) {
           hand.push22Profit = hand.push22 * PUSH22_PAYOUT;
-          await Balance.applyDelta(hand.push22 + hand.push22Profit, "solo_ddm_push22_win");
+          await Balance.applyDelta(hand.push22 + hand.push22Profit, "solo_ddm_push22_win", { logLedger: false });
         } else {
           hand.push22Profit = -hand.push22;
         }
       }
 
-      finalizeRoundSummary();
+      await finalizeRoundSummary();
     }
 
-    function finalizeRoundSummary() {
+    async function finalizeRoundSummary() {
       let totalProfit = state.insuranceProfit || 0;
       for (const hand of state.hands) {
         totalProfit += (hand.profit || 0) + (hand.push22Profit || 0);
       }
       state.lastResults = { totalProfit, sawPush22: state.dealer.length > 0 && bjHandValue(state.dealer).total === 22 };
+      // Every payout above already applied its own delta (logLedger:false)
+      // — this doesn't add money, it flushes everything accumulated since
+      // deal into one ledger entry and clears the persisted round.
+      // Unconditional so a total loss still flushes the original debit.
+      await Balance.settleRound("doubledownmadness", 0, "solo_ddm_round_complete");
       render();
     }
 
@@ -711,6 +734,22 @@
         root = el;
         state = freshState();
         render();
+
+        Balance.loadRoundState("doubledownmadness").then((saved) => {
+          if (!saved || root !== el) return;
+          if (!shoe) shoe = new Shoe(6, 0.25, freshDeck);
+          state.hands = saved.hands;
+          state.dealer = saved.dealer;
+          state.dealerHoleHidden = saved.dealerHoleHidden;
+          state.activeHandIndex = saved.activeHandIndex;
+          state.insuranceOffered = saved.insuranceOffered;
+          state.insuranceBet = saved.insuranceBet;
+          state.insuranceProfit = saved.insuranceProfit;
+          state.insuranceResolved = saved.insuranceResolved;
+          state.phase = "player";
+          render();
+        }).catch(() => {});
+
         return () => { root = null; };
       },
     };

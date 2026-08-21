@@ -490,7 +490,7 @@
       render();
 
       try {
-        await Balance.applyDelta(-wager, "solo_bac_deal");
+        await Balance.applyDelta(-wager, "solo_bac_deal", { logLedger: false });
 
         state.lastOpeningBet = {
           bets: { ...state.bets },
@@ -687,7 +687,7 @@
         lines.push([`Jackpot hand (${hit.tier}) — no Jackpot bet placed`, 0]);
       }
 
-      if (winnings > 0) await Balance.applyDelta(winnings, "solo_bac_settle");
+      await Balance.settleRound("baccarat", winnings, "solo_bac_settle");
 
       const totalProfit = lines.reduce((a, [, p]) => a + p, 0);
       state.lastResult = { lines, totalProfit, jackpotPayout, jackpotTier };

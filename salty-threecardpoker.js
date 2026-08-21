@@ -402,7 +402,7 @@
       if (total > Balance.current) { toast("Not enough balance for that many seats at this bet."); return; }
       busy = true; render();
       try {
-        await Balance.applyDelta(-total, "solo_tcp_deal_multi");
+        await Balance.applyDelta(-total, "solo_tcp_deal_multi", { logLedger: false });
         state.lastOpeningBet = {
           selectedSeats: [...state.selectedSeats],
           antePerHand: ante,
@@ -467,11 +467,24 @@
           }
         }
       }
-      if (sideBetPayout > 0) await Balance.applyDelta(sideBetPayout, "solo_tcp_sidebets_instant");
+      if (sideBetPayout > 0) await Balance.applyDelta(sideBetPayout, "solo_tcp_sidebets_instant", { logLedger: false });
       render();
       advanceIfResolved();
+      if (state.phase === "player") saveMidRoundState();
       busy = false;
       render();
+    }
+
+    function buildRoundSnapshot() {
+      return {
+        hands: state.hands,
+        dealer: state.dealer,
+        dealerHidden: state.dealerHidden,
+        activeHandIndex: state.activeHandIndex,
+      };
+    }
+    function saveMidRoundState() {
+      Balance.saveRoundState("threecardpoker", buildRoundSnapshot()).catch(() => {});
     }
 
     function restoreOpeningBet(snapshot, multiplier = 1) {
@@ -528,7 +541,7 @@
       busy = true;
       if (action === "play") {
         if (Balance.current < hand.ante) { toast("Not enough balance to play this hand."); busy = false; render(); return; }
-        await Balance.applyDelta(-hand.ante, "solo_tcp_play_bet");
+        await Balance.applyDelta(-hand.ante, "solo_tcp_play_bet", { logLedger: false });
         hand.playBet = hand.ante;
         hand.decision = "play";
         hand.status = "played";
@@ -539,6 +552,7 @@
         hand.profit = -hand.ante + (hand.pairPlusProfit || 0) + (hand.jackpotProfit || 0);
       }
       advanceIfResolved();
+      if (state.phase === "player") saveMidRoundState();
       busy = false;
       render();
     }
@@ -598,7 +612,7 @@
         totalProfit += hand.profit;
       }
 
-      if (roundPayout > 0) await Balance.applyDelta(roundPayout, "solo_tcp_round_settle");
+      await Balance.settleRound("threecardpoker", roundPayout, "solo_tcp_round_settle");
 
       state.lastResults = { totalProfit, anteProfitTotal, sideBetProfitTotal, jackpotProfitTotal, dealerQualified: qualifies, dealerHandName: handName(dealerEv) };
       render();
@@ -842,6 +856,20 @@
           });
         }
         render();
+
+        // Covers the true-crash case; resolveAbandonedRound() below already
+        // handles a normal tab-switch away by folding out active hands.
+        Balance.loadRoundState("threecardpoker").then((saved) => {
+          if (!saved || root !== el) return;
+          if (!shoe) shoe = new Shoe(6, 0.25);
+          state.hands = saved.hands;
+          state.dealer = saved.dealer;
+          state.dealerHidden = saved.dealerHidden;
+          state.activeHandIndex = saved.activeHandIndex;
+          state.phase = "player";
+          render();
+        }).catch(() => {});
+
         return () => {
           resolveAbandonedRound();
           if (jackpotUnsub) jackpotUnsub();

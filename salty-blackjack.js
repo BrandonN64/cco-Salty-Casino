@@ -396,7 +396,7 @@
       if (total > Balance.current) { toast("Not enough balance for that many seats at this bet."); return; }
       busy = true; render();
       try {
-        await Balance.applyDelta(-total, "solo_bj_deal_multi");
+        await Balance.applyDelta(-total, "solo_bj_deal_multi", { logLedger: false });
         state.lastOpeningBet = {
           selectedSeats: [...state.selectedSeats],
           betPerHand: bet,
@@ -519,7 +519,7 @@
         payout = await window.SaltyJackpot.award(JACKPOT_TIER, "blackjack", "Suited three of a kind (your two cards + dealer's up card)", true);
       }
       if (payout > 0) {
-        await Balance.applyDelta(stake + payout, "solo_bj_jackpot_win");
+        await Balance.applyDelta(stake + payout, "solo_bj_jackpot_win", { logLedger: false });
         hand.sideBetResults.jackpot = "win";
         hand.jackpotProfit = payout;
       } else {
@@ -539,7 +539,7 @@
       const dealerBJ = isBlackjack(state.dealer);
       if (state.insuranceBet > 0 && !state.insuranceResolved) {
         if (dealerBJ) {
-          await Balance.applyDelta(state.insuranceBet * 3, "solo_bj_insurance_win");
+          await Balance.applyDelta(state.insuranceBet * 3, "solo_bj_insurance_win", { logLedger: false });
           state.insuranceProfit = state.insuranceBet * 2;
         } else {
           state.insuranceProfit = -state.insuranceBet;
@@ -552,17 +552,40 @@
           hand.acted = true;
           if (handBJ) {
             hand.status = "push"; hand.result = "push"; hand.profit = 0;
-            await Balance.applyDelta(hand.bet, "solo_bj_instant_push");
+            await Balance.applyDelta(hand.bet, "solo_bj_instant_push", { logLedger: false });
           } else {
             hand.status = "push"; hand.result = "lose"; hand.profit = -hand.bet;
           }
         } else if (handBJ) {
           hand.acted = true;
           hand.status = "blackjack"; hand.result = "blackjack"; hand.profit = Math.round(hand.bet * 1.5);
-          await Balance.applyDelta(hand.bet + hand.profit, "solo_bj_instant_blackjack");
+          await Balance.applyDelta(hand.bet + hand.profit, "solo_bj_instant_blackjack", { logLedger: false });
         }
       }
       advanceIfResolved();
+      // Hands are dealt and any instant blackjacks/pushes are resolved —
+      // this is the first point where there's a stable mid-round state
+      // worth persisting. If everything already resolved instantly (e.g.
+      // dealer blackjack), advanceIfResolved() above will have already
+      // kicked off runDealer()/settle(), which moves phase off "player" —
+      // in that case there's nothing left to save.
+      if (state.phase === "player") saveMidRoundState();
+    }
+
+    function buildRoundSnapshot() {
+      return {
+        hands: state.hands,
+        dealer: state.dealer,
+        dealerHoleHidden: state.dealerHoleHidden,
+        activeHandIndex: state.activeHandIndex,
+        insuranceOffered: state.insuranceOffered,
+        insuranceBet: state.insuranceBet,
+        insuranceProfit: state.insuranceProfit,
+        insuranceResolved: state.insuranceResolved,
+      };
+    }
+    function saveMidRoundState() {
+      Balance.saveRoundState("blackjack", buildRoundSnapshot()).catch(() => {});
     }
 
     function currentHand() { return state.hands[state.activeHandIndex]; }
@@ -577,7 +600,7 @@
       const amount = clamp(Math.round(totalBet / 2), MIN_BET, MAX_BET);
       if (amount > Balance.current) { toast("Not enough balance for insurance."); return; }
       busy = true; render();
-      await Balance.applyDelta(-amount, "solo_bj_insurance_bet");
+      await Balance.applyDelta(-amount, "solo_bj_insurance_bet", { logLedger: false });
       state.insuranceBet = amount;
       state.insuranceOffered = false;
       await resolveDealerPeek();
@@ -608,7 +631,7 @@
         hand.status = "stood";
       } else if (action === "double") {
         if (Balance.current < hand.bet) { toast("Not enough balance to double."); busy = false; render(); return; }
-        await Balance.applyDelta(-hand.bet, "solo_bj_double_multi");
+        await Balance.applyDelta(-hand.bet, "solo_bj_double_multi", { logLedger: false });
         hand.bet *= 2;
         hand.cards.push(shoe.draw());
         render();
@@ -618,7 +641,7 @@
       } else if (action === "split") {
         const [c0, c1] = hand.cards;
         if (Balance.current < hand.bet) { toast("Not enough balance to split."); busy = false; render(); return; }
-        await Balance.applyDelta(-hand.bet, "solo_bj_split_multi");
+        await Balance.applyDelta(-hand.bet, "solo_bj_split_multi", { logLedger: false });
         const isAces = c0.r === "A";
         const newH = newHand([c1], hand.bet, 0, 0, 0, hand.seatIdx);
         newH.isSplitAces = isAces;
@@ -640,11 +663,19 @@
         if (isAces) { hand.status = "stood"; newH.status = "stood"; }
       } else if (action === "surrender") {
         if (hand.acted || hand.cards.length !== 2 || hand.fromSplit) { busy = false; render(); return; }
-        await Balance.applyDelta(Math.round(hand.bet * SURRENDER_RETURN_FRACTION), "solo_bj_surrender");
+        await Balance.applyDelta(Math.round(hand.bet * SURRENDER_RETURN_FRACTION), "solo_bj_surrender", { logLedger: false });
         hand.status = "surrender"; hand.result = "surrender"; hand.acted = true;
         hand.profit = -Math.round(hand.bet * (1 - SURRENDER_RETURN_FRACTION));
       }
       advanceIfResolved();
+      // One save covering whichever branch just ran (hit/stand/double/
+      // split/surrender), rather than trying to piggyback onto each
+      // action's own balance write individually — double/split draw cards
+      // across multiple render/delay steps, so snapshotting only once
+      // here, after everything for this action has settled, avoids any
+      // risk of a snapshot briefly not matching the balance that was just
+      // debited. Skipped once the round has moved past player decisions.
+      if (state.phase === "player") saveMidRoundState();
       busy = false;
       render();
     }
@@ -691,7 +722,7 @@
           else if (val === dealerVal) { hand.result = "push"; payout = hand.bet; }
           else { hand.result = "lose"; }
         }
-        if (payout > 0) await Balance.applyDelta(payout, "solo_bj_settle_multi");
+        if (payout > 0) await Balance.applyDelta(payout, "solo_bj_settle_multi", { logLedger: false });
         const mainProfit = hand.profit != null ? hand.profit : payout - hand.bet;
         if (hand.profit == null) hand.profit = mainProfit;
         handProfitTotal += mainProfit;
@@ -700,12 +731,12 @@
         const tw = hand.sideBets && hand.sideBets.twentyPlusThree;
         if (pp > 0) {
           const r = hand.sideBetResults.perfectPairs;
-          if (r) { const win = pp * SIDE_BET_PAYTABLES.perfectPairs[r] + pp; await Balance.applyDelta(win, "solo_bj_pp_win"); sbProfit += win - pp; }
+          if (r) { const win = pp * SIDE_BET_PAYTABLES.perfectPairs[r] + pp; await Balance.applyDelta(win, "solo_bj_pp_win", { logLedger: false }); sbProfit += win - pp; }
           else sbProfit -= pp;
         }
         if (tw > 0) {
           const r = hand.sideBetResults.twentyPlusThree;
-          if (r) { const win = tw * SIDE_BET_PAYTABLES.twentyPlusThree[r] + tw; await Balance.applyDelta(win, "solo_bj_213_win"); sbProfit += win - tw; }
+          if (r) { const win = tw * SIDE_BET_PAYTABLES.twentyPlusThree[r] + tw; await Balance.applyDelta(win, "solo_bj_213_win", { logLedger: false }); sbProfit += win - tw; }
           else sbProfit -= tw;
         }
         if (hand.sideBets && hand.sideBets.jackpot > 0 && hand.jackpotProfit != null) {
@@ -719,6 +750,12 @@
       const insuranceProfit = state.insuranceProfit || 0;
       totalProfit += insuranceProfit;
       state.lastResults = { totalProfit, handProfitTotal, sideBetProfitTotal, insuranceProfit, jackpotProfitTotal };
+      // Every payout above already applied its own delta (logLedger:false,
+      // rolled into pendingRoundDelta) — this call doesn't add money, it
+      // just flushes everything accumulated since deal into one ledger
+      // entry and clears the persisted round. Unconditional (even a total
+      // loss needs this, to flush the original debit and clear the round).
+      await Balance.settleRound("blackjack", 0, "solo_bj_round_complete");
       render();
     }
 
@@ -1002,6 +1039,26 @@
           });
         }
         render();
+
+        // Resume a hand left mid-decision by a crash/refresh. There's no
+        // tab-switch-abandon handler in this game (unlike Mines/TCP), so
+        // this persisted snapshot is the only thing standing between a
+        // crash and the player's bet just vanishing with no resolution.
+        Balance.loadRoundState("blackjack").then((saved) => {
+          if (!saved || root !== el) return;
+          if (!shoe) shoe = new Shoe(6, 0.25);
+          state.hands = saved.hands;
+          state.dealer = saved.dealer;
+          state.dealerHoleHidden = saved.dealerHoleHidden;
+          state.activeHandIndex = saved.activeHandIndex;
+          state.insuranceOffered = saved.insuranceOffered;
+          state.insuranceBet = saved.insuranceBet;
+          state.insuranceProfit = saved.insuranceProfit;
+          state.insuranceResolved = saved.insuranceResolved;
+          state.phase = "player";
+          render();
+        }).catch(() => {});
+
         return () => {
           if (jackpotUnsub) jackpotUnsub();
           root = null;

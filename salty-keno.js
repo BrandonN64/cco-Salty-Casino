@@ -357,7 +357,7 @@
       if (total > Balance.current) { toast("Not enough balance for that bet."); return; }
       busy = true; render();
       try {
-        await Balance.applyDelta(-total, "solo_keno_bet");
+        await Balance.applyDelta(-total, "solo_keno_bet", { logLedger: false });
 
         // Save only the original configuration of a successfully funded
         // round. Never derive rebet from drawn numbers or final result state.
@@ -444,7 +444,7 @@
       }
 
       const roundPayout = mainWin + jackpotPayout;
-      if (roundPayout > 0) await Balance.applyDelta(roundPayout, "solo_keno_settle");
+      await Balance.settleRound("keno", roundPayout, "solo_keno_settle");
 
       const mainProfit = mainWin - bet;
       state.lastResult = {

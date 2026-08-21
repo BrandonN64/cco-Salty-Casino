@@ -287,7 +287,7 @@
       if (total > Balance.current) { toast("Not enough balance for that many seats at this bet."); return; }
       busy = true; render();
       try {
-        await Balance.applyDelta(-total, "solo_fbb_deal_multi");
+        await Balance.applyDelta(-total, "solo_fbb_deal_multi", { logLedger: false });
         state.lastOpeningBet = { selectedSeats: [...state.selectedSeats], betPerHand: bet, potOfGoldPerHand: potOfGold };
       }
       catch (e) { toast("Bet failed."); busy = false; render(); return; }
@@ -348,14 +348,14 @@
           hand.acted = true;
           if (handBJ) {
             hand.status = "push"; hand.result = "push"; hand.profit = 0;
-            await Balance.applyDelta(hand.realBet, "solo_fbb_instant_push");
+            await Balance.applyDelta(hand.realBet, "solo_fbb_instant_push", { logLedger: false });
           } else {
             hand.status = "lose"; hand.result = "lose"; hand.profit = -hand.realBet;
           }
         } else if (handBJ) {
           hand.acted = true;
           hand.status = "blackjack"; hand.result = "blackjack"; hand.profit = Math.round(hand.realBet * 1.5);
-          await Balance.applyDelta(hand.realBet + hand.profit, "solo_fbb_instant_blackjack");
+          await Balance.applyDelta(hand.realBet + hand.profit, "solo_fbb_instant_blackjack", { logLedger: false });
         }
       }
       if (dealerBJ) {
@@ -365,6 +365,22 @@
         }
       }
       await advanceIfResolved();
+      if (state.phase === "player") saveMidRoundState();
+    }
+
+    function buildRoundSnapshot() {
+      return {
+        hands: state.hands,
+        dealer: state.dealer,
+        dealerHoleHidden: state.dealerHoleHidden,
+        activeHandIndex: state.activeHandIndex,
+        seatTokens: state.seatTokens,
+        potOfGoldBetBySeat: state.potOfGoldBetBySeat,
+        potOfGoldResults: state.potOfGoldResults,
+      };
+    }
+    function saveMidRoundState() {
+      Balance.saveRoundState("freebetblackjack", buildRoundSnapshot()).catch(() => {});
     }
 
     function currentHand() { return state.hands[state.activeHandIndex]; }
@@ -398,7 +414,7 @@
           addToken(hand.seatIdx);
         } else {
           if (Balance.current < hand.realBet) { toast("Not enough balance to double."); busy = false; render(); return; }
-          await Balance.applyDelta(-hand.realBet, "solo_fbb_double_multi");
+          await Balance.applyDelta(-hand.realBet, "solo_fbb_double_multi", { logLedger: false });
           hand.realBet *= 2;
         }
         hand.doubled = true;
@@ -418,7 +434,7 @@
           addToken(hand.seatIdx);
         } else {
           if (Balance.current < hand.realBet) { toast("Not enough balance to split."); busy = false; render(); return; }
-          await Balance.applyDelta(-hand.realBet, "solo_fbb_split_multi");
+          await Balance.applyDelta(-hand.realBet, "solo_fbb_split_multi", { logLedger: false });
           newRealBet = hand.realBet;
         }
         const isAces = c0.r === "A";
@@ -447,6 +463,7 @@
         }
       }
       await advanceIfResolved();
+      if (state.phase === "player") saveMidRoundState();
       busy = false;
       render();
     }
@@ -504,7 +521,7 @@
             hand.profit = -hand.realBet;
           }
         }
-        if (payout > 0) await Balance.applyDelta(payout, "solo_fbb_settle_multi");
+        if (payout > 0) await Balance.applyDelta(payout, "solo_fbb_settle_multi", { logLedger: false });
         totalProfit += hand.profit;
       }
 
@@ -520,7 +537,7 @@
           let profit;
           if (mult > 0) {
             const win = stake * mult;
-            await Balance.applyDelta(stake + win, "solo_fbb_pot_of_gold_win");
+            await Balance.applyDelta(stake + win, "solo_fbb_pot_of_gold_win", { logLedger: false });
             profit = win;
           } else {
             profit = -stake;
@@ -531,6 +548,7 @@
       for (const r of Object.values(state.potOfGoldResults)) totalProfit += r.profit;
 
       state.lastResults = { totalProfit, sawPush22: push22 };
+      await Balance.settleRound("freebetblackjack", 0, "solo_fbb_round_complete");
       render();
     }
 
@@ -755,6 +773,21 @@
         root = el;
         state = freshState();
         render();
+
+        Balance.loadRoundState("freebetblackjack").then((saved) => {
+          if (!saved || root !== el) return;
+          if (!shoe) shoe = new Shoe(6, 0.25, freshDeck);
+          state.hands = saved.hands;
+          state.dealer = saved.dealer;
+          state.dealerHoleHidden = saved.dealerHoleHidden;
+          state.activeHandIndex = saved.activeHandIndex;
+          state.seatTokens = saved.seatTokens || {};
+          state.potOfGoldBetBySeat = saved.potOfGoldBetBySeat || {};
+          state.potOfGoldResults = saved.potOfGoldResults || null;
+          state.phase = "player";
+          render();
+        }).catch(() => {});
+
         return () => { root = null; };
       },
     };

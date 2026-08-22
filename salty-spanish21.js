@@ -516,22 +516,24 @@
     // it's known.
     async function resolveDealerPeek() {
       const dealerBJ = isBlackjack(state.dealer);
+      let instantCredit = 0;
       for (const hand of state.hands) {
         const handBJ = isBlackjack(hand.cards);
         if (dealerBJ) {
           hand.acted = true;
           if (handBJ) {
             hand.status = "push"; hand.result = "push"; hand.profit = 0;
-            await Balance.applyDelta(hand.bet, "solo_sp21_instant_push", { logLedger: false });
+            instantCredit += hand.bet;
           } else {
             hand.status = "push"; hand.result = "lose"; hand.profit = -hand.bet;
           }
         } else if (handBJ) {
           hand.acted = true;
           hand.status = "blackjack"; hand.result = "blackjack"; hand.profit = Math.round(hand.bet * 1.5);
-          await Balance.applyDelta(hand.bet + hand.profit, "solo_sp21_instant_blackjack", { logLedger: false });
+          instantCredit += hand.bet + hand.profit;
         }
       }
+      if (instantCredit > 0) await Balance.applyDelta(instantCredit, "solo_sp21_instant_resolve", { logLedger: false });
       advanceIfResolved();
       if (state.phase === "player") saveMidRoundState();
     }
@@ -645,6 +647,7 @@
       const dealerUp = state.dealer[0];
       let totalProfit = 0, handProfitTotal = 0, sideBetProfitTotal = 0, bonusProfitTotal = 0, jackpotProfitTotal = 0;
 
+      let totalPayout = 0;
       for (const hand of state.hands) {
         let payout = 0;
         if (hand.result != null) {
@@ -670,7 +673,7 @@
             hand.result = "lose";
           }
         }
-        if (payout > 0) await Balance.applyDelta(payout, "solo_sp21_settle_multi", { logLedger: false });
+        totalPayout += payout;
         const mainProfit = hand.profit != null ? hand.profit : payout - hand.bet;
         if (hand.profit == null) hand.profit = mainProfit;
         handProfitTotal += mainProfit;
@@ -683,14 +686,14 @@
           const bonus = evalBonus21(hand.cards, dealerUp);
           if (bonus) {
             const win = Math.round(hand.bet * bonus.multiplier);
-            await Balance.applyDelta(win, "solo_sp21_bonus21", { logLedger: false });
+            totalPayout += win;
             bonusProfit += win;
             hand.bonusHit = bonus.isSuperBonus ? "Super Bonus!" : "Bonus 21";
 
             if (bonus.isSuperBonus && hand.sideBets.jackpot > 0 && window.SaltyJackpot) {
               const jpPayout = await window.SaltyJackpot.award(JACKPOT_TIER, "spanish21", "Super Bonus: suited 7-7-7 vs dealer 7", true);
               if (jpPayout > 0) {
-                await Balance.applyDelta(hand.sideBets.jackpot + jpPayout, "solo_sp21_jackpot_win", { logLedger: false });
+                totalPayout += hand.sideBets.jackpot + jpPayout;
                 hand.jackpotProfit = jpPayout;
                 jackpotProfitTotal += jpPayout;
               } else {
@@ -719,7 +722,7 @@
           const r = hand.sideBetResults.match;
           if (r) {
             const win = matchStake * MATCH_DEALER_PAYOUTS[r] + matchStake;
-            await Balance.applyDelta(win, "solo_sp21_match_win", { logLedger: false });
+            totalPayout += win;
             sbProfit += win - matchStake;
           } else {
             sbProfit -= matchStake;
@@ -731,7 +734,7 @@
       }
 
       state.lastResults = { totalProfit, handProfitTotal, sideBetProfitTotal, bonusProfitTotal, jackpotProfitTotal };
-      await Balance.settleRound("spanish21", 0, "solo_sp21_round_complete");
+      await Balance.settleRound("spanish21", totalPayout, "solo_sp21_round_complete");
       render();
     }
 

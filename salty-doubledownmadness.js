@@ -432,6 +432,7 @@
       const dealerBust = dealerVal > 21;
       const push22 = dealerBust && dealerVal === 22;
 
+      let totalPayout = 0;
       for (const hand of state.hands) {
         let payout = 0;
         if (hand.result != null) {
@@ -459,7 +460,7 @@
             hand.profit = -hand.wager;
           }
         }
-        if (payout > 0) await Balance.applyDelta(payout, "solo_ddm_settle_multi", { logLedger: false });
+        totalPayout += payout;
       }
 
       // Push 22 side bet resolves off the dealer's real final total,
@@ -468,26 +469,26 @@
         if (!hand.push22) continue;
         if (push22) {
           hand.push22Profit = hand.push22 * PUSH22_PAYOUT;
-          await Balance.applyDelta(hand.push22 + hand.push22Profit, "solo_ddm_push22_win", { logLedger: false });
+          totalPayout += hand.push22 + hand.push22Profit;
         } else {
           hand.push22Profit = -hand.push22;
         }
       }
 
-      await finalizeRoundSummary();
+      await finalizeRoundSummary(totalPayout);
     }
 
-    async function finalizeRoundSummary() {
+    async function finalizeRoundSummary(totalPayout = 0) {
       let totalProfit = state.insuranceProfit || 0;
       for (const hand of state.hands) {
         totalProfit += (hand.profit || 0) + (hand.push22Profit || 0);
       }
       state.lastResults = { totalProfit, sawPush22: state.dealer.length > 0 && bjHandValue(state.dealer).total === 22 };
-      // Every payout above already applied its own delta (logLedger:false)
-      // — this doesn't add money, it flushes everything accumulated since
-      // deal into one ledger entry and clears the persisted round.
-      // Unconditional so a total loss still flushes the original debit.
-      await Balance.settleRound("doubledownmadness", 0, "solo_ddm_round_complete");
+      // Every hand's result/profit above is computed in pure synchronous
+      // JS — no await between hands — so a write failure can't strand
+      // later hands unresolved. This one call pays out everything
+      // computed here and flushes the round's ledger/round-state.
+      await Balance.settleRound("doubledownmadness", totalPayout, "solo_ddm_round_complete");
       render();
     }
 

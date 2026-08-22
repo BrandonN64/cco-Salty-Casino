@@ -433,6 +433,7 @@
         playDealSound();
         await delay(SOLO_DEAL_CARD_MS);
       }
+      let jackpotCredit = 0;
       for (const hand of state.hands) {
         if (hand.sideBets.perfectPairs > 0) hand.sideBetResults.perfectPairs = evalPerfectPairs(hand.cards);
         if (hand.sideBets.twentyPlusThree > 0) hand.sideBetResults.twentyPlusThree = evalTwentyPlusThree(hand.cards, state.dealer[0]);
@@ -440,8 +441,9 @@
         // the dealer's visible up card — both already known here — so it
         // resolves immediately, before insurance or the dealer's hole card
         // even come into play.
-        await resolveJackpotSideBet(hand, state.dealer[0]);
+        jackpotCredit += await resolveJackpotSideBet(hand, state.dealer[0]);
       }
+      if (jackpotCredit > 0) await Balance.applyDelta(jackpotCredit, "solo_bj_jackpot_win", { logLedger: false });
       state.insuranceOffered = state.dealer[0].r === "A";
 
       // If the dealer's up-card is an Ace, real tables offer insurance and
@@ -510,8 +512,11 @@
     // suited natural blackjack, by contrast, is ~1 in 84 — too common).
     // Like any other side bet, a hand with the jackpot bet down that
     // doesn't hit this condition simply loses that stake.
+    // Returns the credit owed for this hand (0 if none) — does NOT write
+    // to Firestore itself, so a caller resolving several hands can
+    // accumulate across all of them and write once at the end.
     async function resolveJackpotSideBet(hand, dealerUpCard) {
-      if (!hand.sideBets || !hand.sideBets.jackpot) return;
+      if (!hand.sideBets || !hand.sideBets.jackpot) return 0;
       const stake = hand.sideBets.jackpot;
       const suitedTrips = evalTwentyPlusThree(hand.cards, dealerUpCard) === "suitedTrips";
       let payout = 0;
@@ -519,13 +524,13 @@
         payout = await window.SaltyJackpot.award(JACKPOT_TIER, "blackjack", "Suited three of a kind (your two cards + dealer's up card)", true);
       }
       if (payout > 0) {
-        await Balance.applyDelta(stake + payout, "solo_bj_jackpot_win", { logLedger: false });
         hand.sideBetResults.jackpot = "win";
         hand.jackpotProfit = payout;
-      } else {
-        hand.sideBetResults.jackpot = "lose";
-        hand.jackpotProfit = -stake;
+        return stake + payout;
       }
+      hand.sideBetResults.jackpot = "lose";
+      hand.jackpotProfit = -stake;
+      return 0;
     }
 
     // The "dealer peek": checks the hole card, resolves any blackjacks
@@ -537,9 +542,10 @@
     // once the dealer's already unbeatable.
     async function resolveDealerPeek() {
       const dealerBJ = isBlackjack(state.dealer);
+      let instantCredit = 0;
       if (state.insuranceBet > 0 && !state.insuranceResolved) {
         if (dealerBJ) {
-          await Balance.applyDelta(state.insuranceBet * 3, "solo_bj_insurance_win", { logLedger: false });
+          instantCredit += state.insuranceBet * 3;
           state.insuranceProfit = state.insuranceBet * 2;
         } else {
           state.insuranceProfit = -state.insuranceBet;
@@ -552,16 +558,17 @@
           hand.acted = true;
           if (handBJ) {
             hand.status = "push"; hand.result = "push"; hand.profit = 0;
-            await Balance.applyDelta(hand.bet, "solo_bj_instant_push", { logLedger: false });
+            instantCredit += hand.bet;
           } else {
             hand.status = "push"; hand.result = "lose"; hand.profit = -hand.bet;
           }
         } else if (handBJ) {
           hand.acted = true;
           hand.status = "blackjack"; hand.result = "blackjack"; hand.profit = Math.round(hand.bet * 1.5);
-          await Balance.applyDelta(hand.bet + hand.profit, "solo_bj_instant_blackjack", { logLedger: false });
+          instantCredit += hand.bet + hand.profit;
         }
       }
+      if (instantCredit > 0) await Balance.applyDelta(instantCredit, "solo_bj_instant_resolve", { logLedger: false });
       advanceIfResolved();
       // Hands are dealt and any instant blackjacks/pushes are resolved —
       // this is the first point where there's a stable mid-round state
@@ -708,6 +715,7 @@
       let handProfitTotal = 0;
       let sideBetProfitTotal = 0;
       let jackpotProfitTotal = 0;
+      let totalPayout = 0;
       for (const hand of state.hands) {
         let payout = 0;
         if (hand.result != null) {
@@ -722,7 +730,7 @@
           else if (val === dealerVal) { hand.result = "push"; payout = hand.bet; }
           else { hand.result = "lose"; }
         }
-        if (payout > 0) await Balance.applyDelta(payout, "solo_bj_settle_multi", { logLedger: false });
+        totalPayout += payout;
         const mainProfit = hand.profit != null ? hand.profit : payout - hand.bet;
         if (hand.profit == null) hand.profit = mainProfit;
         handProfitTotal += mainProfit;
@@ -731,12 +739,12 @@
         const tw = hand.sideBets && hand.sideBets.twentyPlusThree;
         if (pp > 0) {
           const r = hand.sideBetResults.perfectPairs;
-          if (r) { const win = pp * SIDE_BET_PAYTABLES.perfectPairs[r] + pp; await Balance.applyDelta(win, "solo_bj_pp_win", { logLedger: false }); sbProfit += win - pp; }
+          if (r) { const win = pp * SIDE_BET_PAYTABLES.perfectPairs[r] + pp; totalPayout += win; sbProfit += win - pp; }
           else sbProfit -= pp;
         }
         if (tw > 0) {
           const r = hand.sideBetResults.twentyPlusThree;
-          if (r) { const win = tw * SIDE_BET_PAYTABLES.twentyPlusThree[r] + tw; await Balance.applyDelta(win, "solo_bj_213_win", { logLedger: false }); sbProfit += win - tw; }
+          if (r) { const win = tw * SIDE_BET_PAYTABLES.twentyPlusThree[r] + tw; totalPayout += win; sbProfit += win - tw; }
           else sbProfit -= tw;
         }
         if (hand.sideBets && hand.sideBets.jackpot > 0 && hand.jackpotProfit != null) {
@@ -750,12 +758,11 @@
       const insuranceProfit = state.insuranceProfit || 0;
       totalProfit += insuranceProfit;
       state.lastResults = { totalProfit, handProfitTotal, sideBetProfitTotal, insuranceProfit, jackpotProfitTotal };
-      // Every payout above already applied its own delta (logLedger:false,
-      // rolled into pendingRoundDelta) — this call doesn't add money, it
-      // just flushes everything accumulated since deal into one ledger
-      // entry and clears the persisted round. Unconditional (even a total
-      // loss needs this, to flush the original debit and clear the round).
-      await Balance.settleRound("blackjack", 0, "solo_bj_round_complete");
+      // Every hand's result/profit above is computed in pure synchronous
+      // JS — no await between hands — so a write failure can't strand
+      // later hands unresolved. This one call both pays out everything
+      // computed here and flushes the round's ledger/round-state.
+      await Balance.settleRound("blackjack", totalPayout, "solo_bj_round_complete");
       render();
     }
 

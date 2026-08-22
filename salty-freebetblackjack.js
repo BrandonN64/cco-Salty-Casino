@@ -342,20 +342,21 @@
     // bet as an instant loss on a dealer blackjack, per the real rule.
     async function resolveDealerPeek() {
       const dealerBJ = isBlackjack(state.dealer);
+      let instantCredit = 0;
       for (const hand of state.hands) {
         const handBJ = isBlackjack(hand.cards);
         if (dealerBJ) {
           hand.acted = true;
           if (handBJ) {
             hand.status = "push"; hand.result = "push"; hand.profit = 0;
-            await Balance.applyDelta(hand.realBet, "solo_fbb_instant_push", { logLedger: false });
+            instantCredit += hand.realBet;
           } else {
             hand.status = "lose"; hand.result = "lose"; hand.profit = -hand.realBet;
           }
         } else if (handBJ) {
           hand.acted = true;
           hand.status = "blackjack"; hand.result = "blackjack"; hand.profit = Math.round(hand.realBet * 1.5);
-          await Balance.applyDelta(hand.realBet + hand.profit, "solo_fbb_instant_blackjack", { logLedger: false });
+          instantCredit += hand.realBet + hand.profit;
         }
       }
       if (dealerBJ) {
@@ -364,6 +365,7 @@
           state.potOfGoldResults[seatIdx] = { stake: state.potOfGoldBetBySeat[seatIdx], profit: -state.potOfGoldBetBySeat[seatIdx], tokens: 0 };
         }
       }
+      if (instantCredit > 0) await Balance.applyDelta(instantCredit, "solo_fbb_instant_resolve", { logLedger: false });
       await advanceIfResolved();
       if (state.phase === "player") saveMidRoundState();
     }
@@ -493,7 +495,13 @@
       const dealerBust = dealerVal > 21;
       const push22 = dealerBust && dealerVal === 22;
       let totalProfit = 0;
+      let totalPayout = 0;
 
+      // Every hand's result/profit is computed here in pure synchronous JS
+      // — no await between hands — so there's no way for a single hand's
+      // write to fail partway through and leave later hands stuck
+      // unresolved. Only one Firestore write happens for the whole round,
+      // at the very end.
       for (const hand of state.hands) {
         let payout = 0;
         if (hand.result != null) {
@@ -521,7 +529,7 @@
             hand.profit = -hand.realBet;
           }
         }
-        if (payout > 0) await Balance.applyDelta(payout, "solo_fbb_settle_multi", { logLedger: false });
+        totalPayout += payout;
         totalProfit += hand.profit;
       }
 
@@ -537,7 +545,7 @@
           let profit;
           if (mult > 0) {
             const win = stake * mult;
-            await Balance.applyDelta(stake + win, "solo_fbb_pot_of_gold_win", { logLedger: false });
+            totalPayout += stake + win;
             profit = win;
           } else {
             profit = -stake;
@@ -548,7 +556,7 @@
       for (const r of Object.values(state.potOfGoldResults)) totalProfit += r.profit;
 
       state.lastResults = { totalProfit, sawPush22: push22 };
-      await Balance.settleRound("freebetblackjack", 0, "solo_fbb_round_complete");
+      await Balance.settleRound("freebetblackjack", totalPayout, "solo_fbb_round_complete");
       render();
     }
 

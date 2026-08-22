@@ -713,8 +713,10 @@
   const Balance = {
     current: null,
     statsCurrent: null,
+    activeRoundsCurrent: null,
     _listeners: new Set(),
     _statsListeners: new Set(),
+    _activeRoundsListeners: new Set(),
     _unsub: null,
 
     async init() {
@@ -723,8 +725,10 @@
         // locally (balance won't sync or persist across sessions).
         this.current = STARTING_BALANCE;
         this.statsCurrent = emptyStats();
+        this.activeRoundsCurrent = {};
         this._emit();
         this._emitStats();
+        this._emitActiveRounds();
         return;
       }
       await authReady;
@@ -744,8 +748,10 @@
           const data = doc.data();
           this.current = data.balance;
           this.statsCurrent = data.stats || emptyStats();
+          this.activeRoundsCurrent = data.activeRounds || {};
           this._emit();
           this._emitStats();
+          this._emitActiveRounds();
         }
       });
     },
@@ -769,6 +775,20 @@
     },
     _emitStats() {
       for (const fn of this._statsListeners) fn(this.statsCurrent);
+    },
+
+    // Live view of which games have a persisted mid-round snapshot (see
+    // saveRoundState/loadRoundState below) — this is what powers the
+    // "resume your hand" prompt on the home grid. Piggybacks entirely on
+    // the same real-time listener as balance/stats, so checking this
+    // costs zero additional reads no matter how many games are checked.
+    subscribeActiveRounds(fn) {
+      this._activeRoundsListeners.add(fn);
+      if (this.activeRoundsCurrent !== null) fn(this.activeRoundsCurrent);
+      return () => this._activeRoundsListeners.delete(fn);
+    },
+    _emitActiveRounds() {
+      for (const fn of this._activeRoundsListeners) fn(this.activeRoundsCurrent);
     },
 
     // Atomically apply a delta (positive = credit, negative = debit).
@@ -1082,6 +1102,15 @@
 
       #${OVERLAY_ID} .games-grid{ display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
       @media (max-width:900px){ #${OVERLAY_ID} .games-grid{ grid-template-columns:repeat(2,1fr); } }
+      #${OVERLAY_ID} .resume-rounds{ display:flex; flex-direction:column; gap:10px; margin-bottom:20px; }
+      #${OVERLAY_ID} .resume-round-card{
+        display:flex; align-items:center; gap:14px; background:var(--panel);
+        border:1px solid var(--gold); border-radius:14px; padding:12px 16px;
+      }
+      #${OVERLAY_ID} .resume-round-icon{ width:40px; height:40px; flex:none; display:flex; align-items:center; justify-content:center; font-size:24px; }
+      #${OVERLAY_ID} .resume-round-text{ flex:1; }
+      #${OVERLAY_ID} .resume-round-title{ font-weight:700; color:var(--gold-bright); font-size:13px; text-transform:uppercase; letter-spacing:.5px; }
+      #${OVERLAY_ID} .resume-round-label{ font-weight:700; font-size:15px; }
       #${OVERLAY_ID} .game-card{
         background:var(--panel-2); border:1px solid var(--border); border-radius:14px; padding:24px 16px;
         display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px;
@@ -1402,7 +1431,32 @@
       panel.innerHTML = `<div class="table-surface center muted">No games loaded yet.</div>`;
       return;
     }
+
+    // Anything sitting in activeRounds (see saveRoundState/settleRound)
+    // is a hand/board that never reached settlement — most likely a
+    // crash or refresh mid-round. Never auto-navigate into it or offer
+    // to discard it (that's exactly the "walk away from a bad hand"
+    // exploit this whole mechanism exists to prevent) — just surface
+    // that it exists and let the player choose to pick it back up.
+    const pending = Object.keys(Balance.activeRoundsCurrent || {})
+      .filter((key) => GAME_MODULES[key] && Balance.activeRoundsCurrent[key]);
+    const resumeHtml = pending.length ? `
+      <div class="resume-rounds">
+        ${pending.map((key) => `
+          <div class="resume-round-card" data-resume="${key}">
+            <div class="resume-round-icon">${GAME_MODULES[key].icon || DEFAULT_ICON}</div>
+            <div class="resume-round-text">
+              <div class="resume-round-title">Unfinished round</div>
+              <div class="resume-round-label">${GAME_MODULES[key].label || key}</div>
+            </div>
+            <button class="btn gold small">Resume</button>
+          </div>
+        `).join("")}
+      </div>
+    ` : "";
+
     panel.innerHTML = `
+      ${resumeHtml}
       <div class="games-grid">
         ${keys.map((key) => `
           <div class="game-card" data-game="${key}">
@@ -1414,6 +1468,9 @@
     `;
     panel.querySelectorAll(".game-card").forEach((card) => {
       card.addEventListener("click", () => switchTab(card.dataset.game));
+    });
+    panel.querySelectorAll("[data-resume]").forEach((card) => {
+      card.addEventListener("click", () => switchTab(card.dataset.resume));
     });
   }
 
